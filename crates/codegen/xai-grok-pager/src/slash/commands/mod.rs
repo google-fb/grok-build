@@ -20,6 +20,7 @@ pub mod effort_levels;
 pub mod exit;
 pub mod expand;
 pub mod export;
+pub mod export_json;
 pub mod feedback;
 pub mod find;
 pub mod fork;
@@ -108,6 +109,7 @@ pub fn builtin_commands() -> Vec<Arc<dyn SlashCommand>> {
         Arc::new(history::HistoryCommand),
         Arc::new(transcript::TranscriptCommand),
         Arc::new(export::ExportCommand),
+        Arc::new(export_json::ExportJsonCommand),
         Arc::new(copy::CopyCommand),
         Arc::new(find::FindCommand),
         Arc::new(usage::UsageCommand),

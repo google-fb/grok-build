@@ -1,8 +1,8 @@
 //! `x.ai/session/usage` — cumulative session token/cost as [`PromptUsage`].
 //!
 //! Projects the in-memory [`xai_chat_state::UsageLedger`] (main-loop + folded
-//! subagent spend). Partial costs are scrubbed (absence ≠ free). Totals reset
-//! when a session is resumed in a new agent process.
+//! subagent spend). Partial costs are scrubbed (absence ≠ free). Session
+//! totals are restored from `usage.json` on resume.
 
 use agent_client_protocol as acp;
 use serde::{Deserialize, Serialize};

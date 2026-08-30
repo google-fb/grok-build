@@ -103,7 +103,8 @@ use super::status::{
 use super::task_result::{dispatch_task_result, unregister_all_active_sessions};
 use super::transcript::{
     dispatch_copy_assistant_message, dispatch_copy_block_content, dispatch_copy_block_meta,
-    dispatch_dump_input_log, dispatch_export_conversation, dispatch_open_block_viewer,
+    dispatch_dump_input_log, dispatch_export_conversation, dispatch_export_json,
+    dispatch_open_block_viewer,
     dispatch_open_config_agents_modal, dispatch_open_extensions_modal,
     dispatch_open_transcript_pager,
 };
@@ -659,6 +660,10 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         }
         Action::ExportConversation { file_path } => {
             dispatch_export_conversation(app, file_path);
+            vec![]
+        }
+        Action::ExportJson { file_path } => {
+            dispatch_export_json(app, file_path);
             vec![]
         }
         Action::OpenTranscriptPager => {

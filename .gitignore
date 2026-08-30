@@ -1,3 +1,9 @@
 /target
 **/*.rs.bk
 .DS_Store
+
+# Isolated experiment homes (contain auth.json / sessions)
+.dev-flow-home/
+.my-test-home/
+.linux-test-home/
+.dev-flow-*.json

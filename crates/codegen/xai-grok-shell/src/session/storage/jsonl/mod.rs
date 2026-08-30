@@ -238,6 +238,9 @@ impl JsonlStorageAdapter {
     fn signals_file(&self, info: &Info) -> PathBuf {
         self.session_dir(info).join(super::SIGNALS_FILE)
     }
+    fn usage_file(&self, info: &Info) -> PathBuf {
+        self.session_dir(info).join(super::USAGE_FILE)
+    }
     fn announcement_state_file(&self, info: &Info) -> PathBuf {
         self.session_dir(info).join(super::ANNOUNCEMENT_STATE_FILE)
     }
@@ -1449,6 +1452,15 @@ impl StorageAdapter for JsonlStorageAdapter {
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         super::write_bytes_atomic_async(&self.signals_file(info), signals_json).await
     }
+    async fn write_usage(
+        &self,
+        info: &Info,
+        ledger: &xai_chat_state::UsageLedger,
+    ) -> io::Result<()> {
+        let usage_json = serde_json::to_vec(ledger)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        super::write_bytes_atomic_async(&self.usage_file(info), usage_json).await
+    }
     async fn write_announcement_state(
         &self,
         info: &Info,
@@ -1558,6 +1570,9 @@ impl StorageAdapter for JsonlStorageAdapter {
         let signals = self.read_optional_json_sync::<crate::session::signals::SessionSignals>(
             &self.signals_file(info),
         )?;
+        let usage = self.read_optional_json_sync::<xai_chat_state::UsageLedger>(
+            &self.usage_file(info),
+        )?;
         let announcement_state = self
             .read_optional_json_sync::<crate::session::announcement_state::AnnouncementState>(
                 &self.announcement_state_file(info),
@@ -1576,6 +1591,7 @@ impl StorageAdapter for JsonlStorageAdapter {
             plan_mode_state,
             rewind_points,
             signals,
+            usage,
             announcement_state,
             goal_mode_state,
             workflow_runs,
@@ -1586,6 +1602,7 @@ impl StorageAdapter for JsonlStorageAdapter {
             num_updates = result.updates.len(),
             has_plan = result.plan_state.is_some(),
             has_signals = result.signals.is_some(),
+            has_usage = result.usage.is_some(),
             num_rewind_points = result.rewind_points.len(),
             chat_format_version = result.summary.chat_format_version,
             "Session data loaded successfully from JSONL"
@@ -1612,6 +1629,9 @@ impl StorageAdapter for JsonlStorageAdapter {
         let signals = self.read_optional_json_sync::<crate::session::signals::SessionSignals>(
             &self.signals_file(info),
         )?;
+        let usage = self.read_optional_json_sync::<xai_chat_state::UsageLedger>(
+            &self.usage_file(info),
+        )?;
         let announcement_state = self
             .read_optional_json_sync::<crate::session::announcement_state::AnnouncementState>(
                 &self.announcement_state_file(info),
@@ -1627,6 +1647,7 @@ impl StorageAdapter for JsonlStorageAdapter {
             plan_state,
             plan_mode_state,
             signals,
+            usage,
             announcement_state,
             goal_mode_state,
             workflow_runs,
@@ -1636,6 +1657,7 @@ impl StorageAdapter for JsonlStorageAdapter {
             num_chat_messages = result.chat_history.len(),
             has_plan = result.plan_state.is_some(),
             has_signals = result.signals.is_some(),
+            has_usage = result.usage.is_some(),
             chat_format_version = result.summary.chat_format_version,
             "Session data loaded (without updates, rewind points deferred) from JSONL"
         );

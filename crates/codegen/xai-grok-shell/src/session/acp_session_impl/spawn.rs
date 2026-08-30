@@ -240,6 +240,7 @@ pub(crate) async fn spawn_session_actor(
     compat: CompatConfig,
     incremental_bash_output: bool,
     persisted_signals: Option<crate::session::signals::SessionSignals>,
+    persisted_usage: Option<xai_chat_state::UsageLedger>,
     persisted_plan_mode: Option<crate::session::plan_mode::PlanModeSnapshot>,
     persisted_goal_mode: Option<crate::session::goal_tracker::GoalOrchestration>,
     persisted_workflow_runs: Vec<crate::session::workflow::store::RestoredWorkflowRun>,
@@ -560,7 +561,7 @@ pub(crate) async fn spawn_session_actor(
         hard_clear_age_turns: session_pruning_config.hard_clear_age_turns,
     };
     let (chat_state_event_tx, chat_state_event_rx) = mpsc::unbounded_channel();
-    let chat_state_handle = xai_chat_state::ChatStateActor::spawn_with_pruning(
+    let chat_state_handle = xai_chat_state::ChatStateActor::spawn_with_session_usage(
         conversation.clone(),
         chat_state_sampling_config,
         actor_pruning_config,
@@ -569,6 +570,7 @@ pub(crate) async fn spawn_session_actor(
         )),
         chat_state_event_tx,
         tokio_util::sync::CancellationToken::new(),
+        persisted_usage.unwrap_or_default(),
     );
     if (!initial_prompt_texts.is_empty()
         || initial_total_tokens > 0
@@ -2296,6 +2298,7 @@ pub(crate) async fn spawn_session_on_thread(
     compat: CompatConfig,
     incremental_bash_output: bool,
     persisted_signals: Option<crate::session::signals::SessionSignals>,
+    persisted_usage: Option<xai_chat_state::UsageLedger>,
     persisted_plan_mode: Option<crate::session::plan_mode::PlanModeSnapshot>,
     persisted_goal_mode: Option<crate::session::goal_tracker::GoalOrchestration>,
     persisted_workflow_runs: Vec<crate::session::workflow::store::RestoredWorkflowRun>,
@@ -2476,6 +2479,7 @@ pub(crate) async fn spawn_session_on_thread(
                         compat,
                         incremental_bash_output,
                         persisted_signals,
+                        persisted_usage,
                         persisted_plan_mode,
                         persisted_goal_mode,
                         persisted_workflow_runs,

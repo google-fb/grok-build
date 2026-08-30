@@ -21,6 +21,7 @@ const COLUMNS: &[(&str, &str)] = &[
     ("plan", st::PLAN_FILE),
     ("planMode", st::PLAN_MODE_FILE),
     ("signals", st::SIGNALS_FILE),
+    ("usage", st::USAGE_FILE),
     ("goal", st::GOAL_STATE_FILE),
     ("announcement", st::ANNOUNCEMENT_STATE_FILE),
     (SUMMARY_COLUMN, st::SUMMARY_FILE),

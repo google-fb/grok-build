@@ -77,10 +77,33 @@ impl ChatStateActor {
         event_tx: mpsc::UnboundedSender<ChatStateEvent>,
         cancellation_token: tokio_util::sync::CancellationToken,
     ) -> ChatStateHandle {
+        Self::spawn_with_session_usage(
+            initial_conversation,
+            sampling_config,
+            pruning_config,
+            persistence,
+            event_tx,
+            cancellation_token,
+            crate::usage::UsageLedger::default(),
+        )
+    }
+
+    /// Spawn with a restored session billing ledger (`usage.json` on resume).
+    pub fn spawn_with_session_usage(
+        initial_conversation: Vec<ConversationItem>,
+        sampling_config: SamplingConfig,
+        pruning_config: PruningConfig,
+        persistence: Box<dyn ChatPersistence>,
+        event_tx: mpsc::UnboundedSender<ChatStateEvent>,
+        cancellation_token: tokio_util::sync::CancellationToken,
+        session_usage: crate::usage::UsageLedger,
+    ) -> ChatStateHandle {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let mut state = ChatState::new(initial_conversation, sampling_config);
+        state.session_usage = session_usage;
 
         let actor = ChatStateActor {
-            state: ChatState::new(initial_conversation, sampling_config),
+            state,
             pruning_config,
             persistence,
             cmd_rx,

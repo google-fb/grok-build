@@ -1,0 +1,67 @@
+{
+  "format": "grok-session-stats/v1",
+  "exported_at": "2026-08-30T09:01:49.240640600+00:00",
+  "session_id": "01a051e5-d821-75f1-b3a0-412955f586e4",
+  "usage": {
+    "input_tokens": 55339,
+    "output_tokens": 106,
+    "cached_read_tokens": 5760,
+    "cache_creation_tokens": 0,
+    "reasoning_tokens": 68,
+    "model_calls": 3,
+    "api_duration_ms": 6809,
+    "usage_is_incomplete": false,
+    "by_model": {
+      "grok-4.6-build": {
+        "input_tokens": 55339,
+        "output_tokens": 106,
+        "cached_read_tokens": 5760,
+        "cache_creation_tokens": 0,
+        "reasoning_tokens": 68,
+        "model_calls": 3,
+        "api_duration_ms": 6809
+      }
+    }
+  },
+  "isolation": {
+    "memory_enabled": false,
+    "memory_context_injected": false,
+    "memory_tool_calls": 0
+  },
+  "agents": [
+    {
+      "session_id": "01a051e5-d821-75f1-b3a0-412955f586e4",
+      "kind": "parent",
+      "subagent_type": null,
+      "usage": {
+        "input_tokens": 55339,
+        "output_tokens": 106,
+        "cached_read_tokens": 5760,
+        "cache_creation_tokens": 0,
+        "reasoning_tokens": 68,
+        "model_calls": 3,
+        "api_duration_ms": 6809,
+        "usage_is_incomplete": false,
+        "by_model": {
+          "grok-4.6-build": {
+            "input_tokens": 55339,
+            "output_tokens": 106,
+            "cached_read_tokens": 5760,
+            "cache_creation_tokens": 0,
+            "reasoning_tokens": 68,
+            "model_calls": 3,
+            "api_duration_ms": 6809
+          }
+        }
+      },
+      "tool_call_count": 1,
+      "tools": [
+        {
+          "name": "list_dir",
+          "count": 1,
+          "duration_ms": 0
+        }
+      ]
+    }
+  ]
+}

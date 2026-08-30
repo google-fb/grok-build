@@ -321,6 +321,12 @@ pub enum Action {
     ExportConversation {
         file_path: Option<std::path::PathBuf>,
     },
+    /// Export session stats JSON (`usage.json` + tool counts + isolation).
+    /// `None` copies to the clipboard; `Some(p)` writes a UTF-8 file with the
+    /// same ~ expansion and parent-dir create as `/export`.
+    ExportJson {
+        file_path: Option<std::path::PathBuf>,
+    },
     /// Render the active (sub)agent's full transcript to a temp Markdown file and open it in `$PAGER` (default `less`).
     /// The inline TUI is suspended for the duration.
     /// The dispatch handler renders and writes the file and arms `AppView::pending_pager_path`; the event loop does the suspend/restore.

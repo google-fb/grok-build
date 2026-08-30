@@ -6,7 +6,7 @@
 use std::io;
 
 use tokio::sync::{mpsc, oneshot};
-use xai_chat_state::{ChatPersistence, StrictAppendAck, StrictAppendError};
+use xai_chat_state::{ChatPersistence, StrictAppendAck, StrictAppendError, UsageLedger};
 use xai_grok_sampling_types::ConversationItem;
 
 use super::persistence::PersistenceMsg;
@@ -19,6 +19,7 @@ use super::persistence::PersistenceMsg;
 /// - `replace_history` → `PersistenceMsg::ReplaceChatHistory`
 /// - `replace_history_for_strip_and_ack` → `PersistenceMsg::ReplaceChatHistoryForStripAndAck`
 /// - `flush` → `PersistenceMsg::Flush`
+/// - `persist_usage` → `PersistenceMsg::Usage`
 pub(crate) struct ChannelChatPersistence {
     tx: mpsc::UnboundedSender<PersistenceMsg>,
 }
@@ -89,6 +90,10 @@ impl ChatPersistence for ChannelChatPersistence {
 
     fn flush(&mut self) {
         let _ = self.tx.send(PersistenceMsg::Flush);
+    }
+
+    fn persist_usage(&mut self, ledger: &UsageLedger) {
+        let _ = self.tx.send(PersistenceMsg::Usage(ledger.clone()));
     }
 }
 
@@ -172,5 +177,14 @@ mod tests {
         persistence.flush();
         let msg = rx.recv().await.unwrap();
         assert!(matches!(msg, PersistenceMsg::Flush));
+    }
+
+    #[tokio::test]
+    async fn channel_persistence_sends_usage() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut persistence = ChannelChatPersistence::new(tx);
+        persistence.persist_usage(&UsageLedger::default());
+        let msg = rx.recv().await.unwrap();
+        assert!(matches!(msg, PersistenceMsg::Usage(_)));
     }
 }

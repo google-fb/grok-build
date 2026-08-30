@@ -32,6 +32,7 @@ pub(crate) const SUMMARY_FILE: &str = "summary.json";
 pub(crate) const PLAN_FILE: &str = "plan.json";
 pub(crate) const PLAN_MODE_FILE: &str = "plan_mode.json";
 pub(crate) const SIGNALS_FILE: &str = "signals.json";
+pub(crate) const USAGE_FILE: &str = "usage.json";
 pub(crate) const GOAL_STATE_FILE: &str = "goal/state.json";
 pub(crate) const ANNOUNCEMENT_STATE_FILE: &str = "announcement_state.json";
 pub(crate) const CHAT_HISTORY_FILE: &str = "chat_history.jsonl";
@@ -833,6 +834,8 @@ pub struct PersistedData {
     pub rewind_points: Vec<RewindPoint>,
     /// Persisted session signals (None for sessions created before signals persistence)
     pub signals: Option<SessionSignals>,
+    /// Persisted session billing ledger (None for sessions created before usage.json)
+    pub usage: Option<xai_chat_state::UsageLedger>,
     /// Persisted announcement tracking state (None for sessions before this feature)
     pub announcement_state: Option<crate::session::announcement_state::AnnouncementState>,
     /// Persisted goal mode orchestration state (None for sessions without goal mode)
@@ -851,6 +854,8 @@ pub struct PersistedDataLight {
     // `FileStateTracker`). Use `load_session` for the eager set.
     /// Persisted session signals (None for sessions created before signals persistence)
     pub signals: Option<SessionSignals>,
+    /// Persisted session billing ledger (None for sessions created before usage.json)
+    pub usage: Option<xai_chat_state::UsageLedger>,
     /// Persisted announcement tracking state (None for sessions before this feature)
     pub announcement_state: Option<crate::session::announcement_state::AnnouncementState>,
     /// Persisted goal mode orchestration state (None for sessions without goal mode)
@@ -1339,6 +1344,13 @@ pub trait StorageAdapter: Send + Sync {
 
     /// Write/update the session signals snapshot
     async fn write_signals(&self, info: &Info, signals: &SessionSignals) -> io::Result<()>;
+
+    /// Write/update the session billing ledger (`usage.json`)
+    async fn write_usage(
+        &self,
+        info: &Info,
+        ledger: &xai_chat_state::UsageLedger,
+    ) -> io::Result<()>;
 
     /// Write/update the announcement tracking state
     async fn write_announcement_state(

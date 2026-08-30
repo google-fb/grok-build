@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Grok session inspector</title>
+  <style>
+    :root {
+      --bg: #101114;
+      --bg-1: #18191d;
+      --bg-2: #22232a;
+      --line: #2e3038;
+      --text: #eceef2;
+      --muted: #8b8f9a;
+      --ok: #3dd68c;
+      --bad: #ff6b6b;
+      --warn: #e6b84d;
+      --accent: #7aa2ff;
+      --dsw-alias-bg-layer-1: #101114;
+      --dsw-alias-bg-layer-2: #18191d;
+      --dsw-alias-border-l1: #2e3038;
+      --dsw-alias-border-l2: #3a3d46;
+      --dsw-alias-label-primary: #eceef2;
+      --dsw-alias-label-secondary: #8b8f9a;
+      --dsw-alias-state-success-primary: #3dd68c;
+      --dsw-alias-state-error-primary: #ff6b6b;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font: 14px/1.45 ui-sans-serif, system-ui, "Segoe UI", sans-serif; }
+    body { padding: 20px 16px 40px; }
+    .wrap { max-width: 1280px; margin: 0 auto; }
+    h1 { margin: 0 0 6px; font-size: 20px; font-weight: 650; }
+    .lead { margin: 0 0 16px; color: var(--muted); }
+    .drop {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 8px; min-height: 112px; padding: 20px; border: 1px dashed var(--line);
+      border-radius: 12px; background: var(--bg-1); cursor: pointer;
+    }
+    .drop.over { border-color: var(--accent); background: #1a2236; }
+    .drop strong { font-size: 15px; }
+    .drop span { color: var(--muted); font-size: 12px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    button, .file-btn {
+      appearance: none; border: 1px solid var(--line); background: var(--bg-2); color: var(--text);
+      border-radius: 8px; padding: 8px 12px; font: inherit; cursor: pointer;
+    }
+    button:hover, .file-btn:hover { border-color: var(--accent); }
+    #file, #dir { display: none; }
+    .err { margin-top: 14px; padding: 12px 14px; border-radius: 8px; background: #2a1518; color: var(--bad); display: none; }
+    .err.show { display: block; }
+    .banner { margin-top: 14px; padding: 12px 14px; border-radius: 8px; display: none; }
+    .banner.show { display: block; }
+    .banner.ok { background: #123024; color: var(--ok); }
+    .banner.bad { background: #2a1518; color: var(--bad); }
+    .banner.warn { background: #2a2414; color: var(--warn); }
+    .metrics {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 1px; margin-top: 14px; background: var(--line); border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+    }
+    .metric { background: var(--bg-1); padding: 12px 14px; }
+    .metric b { display: block; font-variant-numeric: tabular-nums; font-size: 18px; }
+    .metric span { color: var(--muted); font-size: 11px; }
+    .meta { margin-top: 10px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; word-break: break-all; }
+    h2 { margin: 22px 0 8px; font-size: 13px; font-weight: 650; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
+    table { width: 100%; border-collapse: collapse; background: var(--bg-1); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+    th { color: var(--muted); font-size: 11px; font-weight: 600; background: var(--bg-2); }
+    tr:last-child td { border-bottom: 0; }
+    .empty { color: var(--muted); padding: 16px; }
+    .hidden { display: none !important; }
+    code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
+    .sessions { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto; padding-right: 4px; }
+    .sess {
+      display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left;
+      padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-1);
+    }
+    .sess.on { border-color: #4d82e8; background: rgba(77,130,232,.12); }
+    .sess b { font-size: 13px; }
+    .sess small { color: var(--muted); font-size: 11px; }
+    .wfjson-root { margin-top: 18px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--dsw-alias-bg-layer-1); }
+    .wfjson-summary { display: flex; align-items: center; justify-content: space-between; gap: 24px; min-height: 56px; padding: 0 20px; border-bottom: 1px solid var(--line); }
+    .wfjson-metrics { display: flex; align-items: stretch; }
+    .wfjson-metric { display: flex; flex-direction: column; align-items: center; min-width: 86px; padding: 0 16px; border-left: 1px solid var(--line); }
+    .wfjson-metric strong { font-size: 14px; line-height: 18px; font-variant-numeric: tabular-nums; }
+    .wfjson-metric span { color: var(--muted); font-size: 10px; line-height: 14px; }
+    .wfjson-workspace { display: grid; grid-template-columns: minmax(220px, 264px) minmax(0, 1fr); min-height: 520px; }
+    .wfjson-turns { display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg-1); border-right: 1px solid var(--line); }
+    .wfjson-turns > header { display: flex; align-items: center; justify-content: space-between; min-height: 44px; padding: 0 16px; border-bottom: 1px solid var(--line); font-size: 12px; }
+    .wfjson-turns > header span { color: var(--muted); }
+    .wfjson-turnList { display: flex; flex: 1; flex-direction: column; gap: 8px; min-height: 0; padding: 10px; overflow-y: auto; }
+    .wfjson-turn { display: flex; flex-direction: column; gap: 7px; width: 100%; padding: 12px; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; font: inherit; text-align: left; cursor: pointer; }
+    .wfjson-turnSelected { border-color: #4d82e8; background: rgba(77,130,232,.12); }
+    .wfjson-turnTop, .wfjson-turnBottom { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .wfjson-turnTop strong { min-width: 0; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+    .wfjson-turnTop time, .wfjson-turnBottom > span:first-child { color: var(--muted); font-size: 10px; }
+    .wfjson-ok { color: var(--ok); }
+    .wfjson-run { color: #4d82e8; }
+    .wfjson-err { color: var(--bad); }
+    .wfjson-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+    .wfjson-turnHeader { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 64px; padding: 8px 20px; border-bottom: 1px solid var(--line); }
+    .wfjson-turnHeader strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+    .wfjson-turnMeta { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 10px; white-space: nowrap; }
+    .wfjson-calls { flex: 1; min-height: 0; overflow: auto; padding: 14px 16px 24px; }
+    .wfjson-call { overflow: hidden; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 12px; }
+    .wfjson-callHead { display: flex; align-items: center; gap: 12px; min-height: 38px; padding: 0 14px; color: var(--muted); background: var(--bg-1); border-bottom: 1px solid var(--line); font-size: 10px; }
+    .wfjson-callHead strong { margin-right: auto; color: var(--text); font-size: 12px; }
+    .wfjson-callHead > span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+    .wfjson-flow { display: flex; align-items: stretch; width: 100%; min-width: 0; padding: 14px; overflow-x: auto; }
+    .wfjson-card { --wf-accent: var(--line); --wf-head-bg: var(--bg-1); --wf-head-fg: var(--text); position: relative; display: flex; flex: 0 0 206px; flex-direction: column; min-width: 0; padding: 0; overflow: hidden; color: inherit; background: var(--bg); border: 1px solid var(--wf-accent); border-radius: 8px; font: inherit; text-align: left; cursor: pointer; }
+    .wfjson-cardOn::after { position: absolute; inset: 0; border: 2px solid var(--wf-accent); border-radius: inherit; content: ""; pointer-events: none; }
+    .wfjson-request { --wf-accent: #5b86c7; --wf-head-bg: #1d2a3d; --wf-head-fg: #9fc7ff; }
+    .wfjson-response { --wf-accent: #8b77c4; --wf-head-bg: #2a2435; --wf-head-fg: #c8b7f0; }
+    .wfjson-tool { --wf-accent: #c7925b; --wf-head-bg: #35291f; --wf-head-fg: #ffc98f; }
+    .wfjson-toolErr { --wf-accent: var(--bad); }
+    .wfjson-cardHead { display: flex; align-items: center; min-height: 28px; padding: 0 9px; color: var(--wf-head-fg); background: var(--wf-head-bg); }
+    .wfjson-cardTitle { display: flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 650; }
+    .wfjson-cardBody { display: flex; flex-direction: column; gap: 8px; padding: 10px 11px 11px; }
+    .wfjson-cardPreview { overflow: hidden; min-height: 16px; color: var(--muted); font-size: 10px; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+    .wfjson-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+    .wfjson-chips span { padding: 2px 5px; color: var(--muted); background: var(--bg-1); border-radius: 4px; font-size: 9px; }
+    .wfjson-arrow { align-self: center; flex: 0 0 auto; margin: 0 9px; color: var(--muted); }
+    .wfjson-toolRes { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 5px; padding: 3px 5px; border-radius: 5px; font-size: 9px; color: var(--muted); }
+    .wfjson-toolRes span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .wfjson-toolOk { color: var(--ok); background: rgba(34,197,94,.12); }
+    .wfjson-toolBad { color: var(--bad); background: rgba(239,68,68,.12); }
+    .wfjson-detail { margin: 0 14px 14px; background: var(--bg-1); border: 1px solid var(--line); border-radius: 8px; }
+    .wfjson-detail > header { display: flex; align-items: center; justify-content: space-between; min-height: 36px; padding: 0 10px 0 12px; border-bottom: 1px solid var(--line); font-size: 11px; }
+    .wfjson-detail > header button { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; color: var(--muted); background: transparent; border: 0; border-radius: 5px; cursor: pointer; }
+    .wfjson-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); }
+    .wfjson-col { display: flex; min-width: 0; flex-direction: column; padding: 10px 12px; background: var(--bg); }
+    .wfjson-col h4 { margin: 0 0 7px; color: var(--muted); font-size: 10px; font-weight: 600; }
+    .wfjson-insp { --wf-json-key: #5db0d7; --wf-json-str: #f28b82; --wf-json-num: #99c8ff; overflow: hidden; display: flex; flex-direction: column; min-height: 0; background: var(--bg-1); border: 1px solid var(--line); border-radius: 7px; }
+    .wfjson-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; padding: 0 7px 0 10px; border-bottom: 1px solid var(--line); }
+    .wfjson-lang { color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .04em; }
+    .wfjson-modes { display: flex; align-items: center; gap: 2px; }
+    .wfjson-mode { border: 0; background: transparent; color: var(--muted); border-radius: 5px; padding: 3px 7px; cursor: pointer; font-size: 10px; }
+    .wfjson-modeOn { color: var(--text); background: var(--bg); }
+    .wfjson-view { max-height: 220px; min-height: 120px; padding: 10px 12px 12px; overflow: auto; }
+    .wfjson-viewWide { max-height: min(70vh, 560px); }
+    .wfjson-tree, .wfjson-pretty { width: 100%; min-width: 0; margin: 0; color: var(--text); font: 10px/17px ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+    .wfjson-row { min-width: 0; padding-left: 16px; }
+    .wfjson-k { margin-right: 5px; color: var(--wf-json-key); font-weight: 600; }
+    .wfjson-s { color: var(--wf-json-str); }
+    .wfjson-n { color: var(--wf-json-num); }
+    .wfjson-kw { color: var(--wf-json-num); }
+    .wfjson-tog { display: inline-grid; width: 16px; height: 16px; margin-left: -16px; place-items: center; color: var(--muted); cursor: pointer; user-select: none; }
+    .wfjson-ellipsis { margin: 0 3px; color: var(--muted); cursor: pointer; }
+    .wfjson-empty { display: grid; min-height: 160px; place-items: center; color: var(--muted); font-size: 12px; }
+    @media (max-width: 900px) {
+      .wfjson-workspace { grid-template-columns: 1fr; grid-template-rows: minmax(138px, 28vh) minmax(0, 1fr); }
+      .wfjson-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Grok session inspector</h1>
+    <p class="lead">用 <code>node serve.mjs</code> 開這個頁，會自動掃 session 目錄裡的 <code>chat_history.jsonl</code> / <code>updates.jsonl</code>，還原 REQUEST / RESPONSE / tool JSON。也可以拖 session 資料夾或 <code>/export-json</code>。</p>
+
+    <div class="drop" id="drop" tabindex="0">
+      <strong>把 session 資料夾、jsonl 或 export JSON 拖到這裡</strong>
+      <span>本機伺服器開著時，也可以直接點下面的 session</span>
+    </div>
+    <div class="actions">
+      <label class="file-btn">選擇檔案<input id="file" type="file" accept=".json,.jsonl,application/json" multiple></label>
+      <label class="file-btn">選擇 session 資料夾<input id="dir" type="file" webkitdirectory></label>
+      <button type="button" id="sample">載入 sample.json</button>
+      <button type="button" id="reload">重新掃描 sessions</button>
+    </div>
+    <div class="err" id="err"></div>
+    <div id="sessionBox" class="hidden">
+      <h2>本機 sessions</h2>
+      <div class="sessions" id="sessions"></div>
+    </div>
+
+    <div id="view" class="hidden">
+      <div class="banner" id="iso"></div>
+      <div class="banner" id="incomplete"></div>
+      <p class="meta" id="meta"></p>
+      <div class="metrics" id="metrics"></div>
+      <h2>Agents</h2>
+      <div id="agents"></div>
+      <h2>Tools</h2>
+      <div id="tools"></div>
+      <h2>By model</h2>
+      <div id="models"></div>
+      <div id="workflow"></div>
+    </div>
+  </div>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

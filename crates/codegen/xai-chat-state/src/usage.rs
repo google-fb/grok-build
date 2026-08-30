@@ -1,4 +1,8 @@
-//! Per-prompt and per-session billing ledgers (not serialized).
+//! Per-prompt and per-session billing ledgers.
+//!
+//! Session ledgers are serialized to `{session_dir}/usage.json` after each
+//! billed mutation so reboot / TUI restart can restore them. Prompt ledgers
+//! stay RAM-only (cleared on the next prompt).
 //!
 //! `total_tokens()` is input + output: Responses wire `total` is live context
 //! length. Compaction and other side calls never call `record_main_loop_call`.
@@ -26,9 +30,11 @@
 //! and scrubs costs when partial or incomplete.
 
 use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
 use xai_grok_sampling_types::TokenUsage;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct UsageTotals {
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -103,7 +109,8 @@ fn merge_cost_ticks(a: Option<i64>, b: Option<i64>) -> Option<i64> {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct UsageLedger {
     pub totals: UsageTotals,
     pub by_model: IndexMap<String, UsageTotals>,
@@ -198,5 +205,56 @@ mod tests {
 
         ledger.record_subagent(&[], true);
         assert!(ledger.incomplete);
+    }
+
+    #[test]
+    fn usage_json_roundtrip_keeps_stable_field_names() {
+        let mut ledger = UsageLedger::default();
+        ledger.record_main_loop_call("m", &tu(10, 4), Some(12), None);
+        ledger.record_main_loop_call(
+            "m",
+            &TokenUsage {
+                prompt_tokens: 3,
+                completion_tokens: 1,
+                total_tokens: 0,
+                reasoning_tokens: 2,
+                cached_prompt_tokens: 1,
+                cache_creation_prompt_tokens: 0,
+            },
+            Some(8),
+            Some(50),
+        );
+        ledger.record_subagent(
+            &[(
+                "child".into(),
+                UsageTotals {
+                    input_tokens: 7,
+                    output_tokens: 2,
+                    cached_read_tokens: 1,
+                    model_calls: 1,
+                    ..Default::default()
+                },
+            )],
+            true,
+        );
+
+        let json = serde_json::to_value(&ledger).expect("serialize");
+        assert!(json.get("totals").is_some());
+        assert!(json.get("by_model").is_some());
+        assert_eq!(json["main_loop_model_calls"], 2);
+        assert_eq!(json["incomplete"], true);
+        assert_eq!(json["totals"]["input_tokens"], 20);
+        assert_eq!(json["totals"]["output_tokens"], 7);
+        assert_eq!(json["totals"]["cached_read_tokens"], 2);
+        assert_eq!(json["totals"]["model_calls"], 3);
+
+        let restored: UsageLedger = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(restored, ledger);
+    }
+
+    #[test]
+    fn missing_usage_json_fields_deserialize_as_empty_ledger() {
+        let restored: UsageLedger = serde_json::from_str("{}").expect("empty object");
+        assert_eq!(restored, UsageLedger::default());
     }
 }

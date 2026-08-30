@@ -84,6 +84,9 @@ See ~/.grok/README.md for more information.
     Wrap(WrapArgs),
     /// Export a session transcript as Markdown
     Export(crate::export_cmd::ExportArgs),
+    /// Export session stats as JSON (tokens, tools, isolation)
+    #[command(name = "export-json")]
+    ExportJson(crate::export_json::ExportJsonArgs),
     /// Export or upload session trace data
     Trace(crate::trace_cmd::TraceArgs),
     /// Check for updates or install a specific version

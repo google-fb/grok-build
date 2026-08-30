@@ -173,7 +173,8 @@ pub(crate) struct ChatState {
     pub last_turn_usage: Option<TokenUsage>,
     /// Billing for the open prompt (cleared on next prompt; not persisted).
     pub prompt_usage: Option<UsageLedger>,
-    /// Lifetime session billing (not persisted).
+    /// Lifetime session billing. Restored from `{session_dir}/usage.json` on
+    /// spawn / resume; written after every billed session mutation.
     pub session_usage: UsageLedger,
     /// Offset-based turn capture state. `Some` = capture active, `None` = inactive.
     /// Cleared on `TakeTurnMessages` (consumed), `BeginTurnCapture` (new turn),

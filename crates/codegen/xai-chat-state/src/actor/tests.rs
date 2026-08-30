@@ -4,7 +4,7 @@ use std::num::NonZeroU64;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
-use xai_grok_sampling_types::{ConversationItem, SamplingConfig};
+use xai_grok_sampling_types::{ConversationItem, SamplingConfig, TokenUsage};
 
 use crate::StrictAppendAck;
 use crate::actor::ChatStateActor;
@@ -71,9 +71,33 @@ impl TestHarness {
         mock: MockChatPersistence,
         persistence_rx: MockPersistenceReceiver,
     ) -> Self {
+        Self::with_persistence_and_usage(
+            items,
+            config,
+            mock,
+            persistence_rx,
+            crate::usage::UsageLedger::default(),
+        )
+    }
+
+    fn with_persistence_and_usage(
+        items: Vec<ConversationItem>,
+        config: SamplingConfig,
+        mock: MockChatPersistence,
+        persistence_rx: MockPersistenceReceiver,
+        session_usage: crate::usage::UsageLedger,
+    ) -> Self {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let token = tokio_util::sync::CancellationToken::new();
-        let handle = ChatStateActor::spawn(items, config, Box::new(mock), event_tx, token.clone());
+        let handle = ChatStateActor::spawn_with_session_usage(
+            items,
+            config,
+            crate::types::PruningConfig::default(),
+            Box::new(mock),
+            event_tx,
+            token.clone(),
+            session_usage,
+        );
         Self {
             handle,
             event_rx,
@@ -567,6 +591,145 @@ async fn prompt_usage_ledger_via_handle_resets_and_clears() {
             .flatten()
             .is_none()
     );
+}
+
+fn usage_call(prompt: u32, completion: u32, cached: u32) -> TokenUsage {
+    TokenUsage {
+        prompt_tokens: prompt,
+        completion_tokens: completion,
+        total_tokens: 0,
+        reasoning_tokens: 0,
+        cached_prompt_tokens: cached,
+        cache_creation_prompt_tokens: 0,
+    }
+}
+
+#[tokio::test]
+async fn usage_persist_restores_ledger_from_serialized_snapshot() {
+    let mut h = TestHarness::new();
+    h.handle
+        .record_model_call_usage(Some("a".into()), usage_call(100, 10, 4), Some(20), None);
+    h.handle
+        .record_model_call_usage(Some("a".into()), usage_call(50, 5, 2), Some(10), None);
+    assert!(
+        h.handle
+            .record_subagent_usage(
+                vec![(
+                    "b".into(),
+                    crate::usage::UsageTotals {
+                        input_tokens: 7,
+                        output_tokens: 3,
+                        cached_read_tokens: 1,
+                        model_calls: 1,
+                        ..Default::default()
+                    },
+                )],
+                true,
+                true,
+            )
+            .await
+    );
+
+    let original = h
+        .handle
+        .try_get_session_usage()
+        .await
+        .expect("actor alive");
+    let records = h.drain_persistence();
+    let persisted = records
+        .into_iter()
+        .filter_map(|r| match r {
+            PersistenceRecord::Usage(ledger) => Some(ledger),
+            _ => None,
+        })
+        .last()
+        .expect("session ledger persisted");
+    assert_eq!(persisted, original);
+
+    let usage_json = serde_json::to_vec(&persisted).expect("usage.json");
+    let restored_file: crate::usage::UsageLedger =
+        serde_json::from_slice(&usage_json).expect("read usage.json");
+
+    let (mock, rx) = MockChatPersistence::new();
+    let restored = TestHarness::with_persistence_and_usage(
+        vec![],
+        test_config(),
+        mock,
+        rx,
+        restored_file,
+    );
+    let loaded = restored
+        .handle
+        .try_get_session_usage()
+        .await
+        .expect("restored actor alive");
+    assert_eq!(loaded.totals.input_tokens, original.totals.input_tokens);
+    assert_eq!(loaded.totals.output_tokens, original.totals.output_tokens);
+    assert_eq!(
+        loaded.totals.cached_read_tokens,
+        original.totals.cached_read_tokens
+    );
+    assert_eq!(loaded.totals.model_calls, original.totals.model_calls);
+    assert_eq!(loaded.main_loop_model_calls, original.main_loop_model_calls);
+    assert_eq!(loaded.incomplete, original.incomplete);
+    assert_eq!(loaded, original);
+}
+
+#[tokio::test]
+async fn usage_crash_style_persist_keeps_first_call_only() {
+    let mut h = TestHarness::new();
+    h.handle
+        .record_model_call_usage(Some("a".into()), usage_call(11, 2, 1), Some(5), None);
+    let after_first = h
+        .handle
+        .try_get_session_usage()
+        .await
+        .expect("actor alive");
+    let first_snapshot = h
+        .drain_persistence()
+        .into_iter()
+        .filter_map(|r| match r {
+            PersistenceRecord::Usage(ledger) => Some(ledger),
+            _ => None,
+        })
+        .last()
+        .expect("call 1 persisted");
+    assert_eq!(first_snapshot.totals.input_tokens, 11);
+    assert_eq!(first_snapshot.main_loop_model_calls, 1);
+
+    h.handle
+        .record_model_call_usage(Some("a".into()), usage_call(9, 1, 0), Some(3), None);
+    let after_second = h
+        .handle
+        .try_get_session_usage()
+        .await
+        .expect("actor alive");
+    assert_eq!(after_second.totals.input_tokens, 20);
+    assert_eq!(after_second.main_loop_model_calls, 2);
+
+    let (mock, rx) = MockChatPersistence::new();
+    let restored = TestHarness::with_persistence_and_usage(
+        vec![],
+        test_config(),
+        mock,
+        rx,
+        first_snapshot.clone(),
+    );
+    let loaded = restored
+        .handle
+        .try_get_session_usage()
+        .await
+        .expect("restored actor alive");
+    assert_eq!(loaded.totals.input_tokens, after_first.totals.input_tokens);
+    assert_eq!(loaded.totals.output_tokens, after_first.totals.output_tokens);
+    assert_eq!(
+        loaded.totals.cached_read_tokens,
+        after_first.totals.cached_read_tokens
+    );
+    assert_eq!(loaded.totals.model_calls, 1);
+    assert_eq!(loaded.main_loop_model_calls, 1);
+    assert!(!loaded.incomplete);
+    assert_ne!(loaded.totals.input_tokens, after_second.totals.input_tokens);
 }
 
 #[tokio::test]

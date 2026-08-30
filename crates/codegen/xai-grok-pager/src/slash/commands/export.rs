@@ -64,7 +64,7 @@ impl SlashCommand for ExportCommand {
 /// the 1000-entry pre-sort cap guards against pathological directories.
 /// Moving to the `@`-style background daemon would require adding tick-based
 /// polling to the slash command system (which is currently event-driven only).
-fn list_path_completions(cwd: &Path, query: &str) -> Vec<ArgItem> {
+pub(crate) fn list_path_completions(cwd: &Path, query: &str) -> Vec<ArgItem> {
     let trimmed = query.trim_start();
     if trimmed.is_empty() {
         return Vec::new();

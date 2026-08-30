@@ -38,6 +38,65 @@ for the version of the code present in this tree.
 
 ---
 
+## 本分支（`tuco-web-testing`）改了什麼
+
+這條 branch 不是官方 grok 發行檔。終端機裡的 `grok`（例如 `~/.grok/bin/grok`）**沒有** 下列功能。要測，請用本 repo 編出來的 `target/debug/xai-grok-pager`（Windows 為 `.exe`）。
+
+相對 upstream `SOURCE_REV` `d5a0335a…` / 本樹 `bc7f02ed`，多了：
+
+1. **Usage 落盤**  
+   每次計費後把 `UsageLedger` 寫進 session 目錄的 `usage.json`。TUI 重開或 `/resume` 會還原 token，不再只活在 RAM。
+
+2. **`/export-json`（pager builtin，不會進模型）**  
+   TUI：`/export-json [filename]`  
+   CLI：`xai-grok-pager export-json <session-id> [path]`  
+   產出 `grok-session-stats/v1`：根層 token、各 agent、工具次數、記憶隔離旗標（`memory_enabled` / `memory_context_injected` / `memory_tool_calls`）。
+
+3. **Session inspector（獨立資料夾 [`web/`](web/README.md)）**  
+   `node serve.mjs` 自動讀 `chat_history.jsonl` / `updates.jsonl`，還原 REQUEST / RESPONSE / tool JSON，可展開查看呼叫參數與結果。
+
+4. **Windows 編譯**  
+   - `protoc --dependency_out=/dev/stdout` 在 Windows 會失敗，改成跳過這段 rerun 掃描。  
+   - MSVC debug 預設 1MB stack 會爆；`.cargo/config.toml` 加上 `/STACK:16777216`。Linux / macOS 不受影響。
+
+實驗時請關記憶：`GROK_MEMORY=0` 與 `--no-memory`。不要打 `/memory on`、`/remember`、`/flush`、`/dream`。
+
+### 用這包，不要用已安裝的 grok
+
+```sh
+# Linux / macOS
+export GROK_HOME="$PWD/.linux-test-home"
+export GROK_MEMORY=0
+mkdir -p "$GROK_HOME"
+# 可把本機 ~/.grok/auth.json 拷進 $GROK_HOME，或第一次開 TUI 再登入
+cargo build -p xai-grok-pager-bin
+./target/debug/xai-grok-pager --no-memory
+```
+
+```powershell
+# Windows：不要打 grok
+$pager = "$PWD\target\debug\xai-grok-pager.exe"
+$env:GROK_HOME = "$PWD\.my-test-home"
+$env:GROK_MEMORY = "0"
+New-Item -ItemType Directory -Force $env:GROK_HOME | Out-Null
+Copy-Item "$env:USERPROFILE\.grok\auth.json" "$env:GROK_HOME\auth.json" -Force
+& $pager --no-memory
+```
+
+跑完後：
+
+```sh
+./target/debug/xai-grok-pager export-json <session-id> out.json
+cd web && node serve.mjs "$GROK_HOME"
+# 瀏覽器 http://127.0.0.1:4177
+```
+
+Windows 的 `.exe` 不能拿到 Linux 跑；測試機請用同一份原始碼在 Linux 本機 `cargo build -p xai-grok-pager-bin`（不要拷 `target/`）。`web/` 不用編 Rust。
+
+不要 commit `auth.json`、`.dev-flow-home/`、或任何 `GROK_HOME`。
+
+---
+
 ## Installing the released binary
 
 Prebuilt binaries are published for macOS, Linux, and Windows:
@@ -104,6 +163,7 @@ MCP servers, skills, plugins, hooks, headless mode, sandboxing, and more.
 | `crates/codegen/...` | The rest of the CLI crate closure (config, MCP, markdown, sandbox, ...) |
 | `crates/common/`, `crates/build/`, `prod/mc/` | Small shared leaf crates pulled in by the closure |
 | `third_party/` | Vendored upstream source (Mermaid diagram stack) — see below |
+| `web/` | **This branch:** session inspector (jsonl → REQUEST/RESPONSE/tool JSON). See [`web/README.md`](web/README.md). |
 
 > [!IMPORTANT]
 > The root `Cargo.toml` (workspace members, dependency versions, lints,

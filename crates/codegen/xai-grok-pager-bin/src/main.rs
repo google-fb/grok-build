@@ -68,6 +68,7 @@ fn process_identity(command: Option<&Command>, is_interactive: bool) -> Option<P
             | Command::Share(_)
             | Command::Wrap(_)
             | Command::Export(_)
+            | Command::ExportJson(_)
             | Command::Trace(_)
             | Command::Update { .. }
             | Command::Version { .. }
@@ -108,6 +109,7 @@ fn command_needs_pre_sandbox_policy_heal(command: Option<&Command>) -> bool {
             | Command::Share(_)
             | Command::Wrap(_)
             | Command::Export(_)
+            | Command::ExportJson(_)
             | Command::Trace(_)
             | Command::Update { .. }
             | Command::Version { .. }
@@ -2231,6 +2233,10 @@ async fn async_main(args: PagerArgs) -> Result<()> {
             Command::Export(export_args) => {
                 init_tracing_simple("cli");
                 return xai_grok_pager::export_cmd::run(export_args);
+            }
+            Command::ExportJson(export_args) => {
+                init_tracing_simple("cli");
+                return xai_grok_pager::export_json::run(export_args);
             }
             Command::Trace(trace_args) => {
                 init_tracing_simple("cli");

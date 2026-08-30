@@ -217,6 +217,84 @@ pub(super) fn dispatch_export_conversation(
     });
 }
 
+/// Dispatch for `/export-json`. Reads restored `usage.json` from the session dir.
+pub(super) fn dispatch_export_json(
+    app: &mut AppView,
+    file_path: Option<std::path::PathBuf>,
+) {
+    with_active_agent(app, |agent| {
+        let Some(session_id) = agent.session.session_id.as_ref() else {
+            agent
+                .scrollback
+                .push_block(RenderBlock::system("No active session to export"));
+            return;
+        };
+        let bundle = match crate::export_json::export_session_stats(session_id.0.as_ref()) {
+            Ok(bundle) => bundle,
+            Err(e) => {
+                agent
+                    .scrollback
+                    .push_block(RenderBlock::system(format!("Failed to export stats: {e}")));
+                return;
+            }
+        };
+        let json = match serde_json::to_string_pretty(&bundle) {
+            Ok(json) => json,
+            Err(e) => {
+                agent
+                    .scrollback
+                    .push_block(RenderBlock::system(format!("Failed to serialize stats: {e}")));
+                return;
+            }
+        };
+
+        if let Some(p) = file_path {
+            let expanded = crate::export_json::expand_output_path(&p);
+            if let Some(parent) = expanded.parent()
+                && let Err(e) = std::fs::create_dir_all(parent)
+            {
+                agent.scrollback.push_block(RenderBlock::system(format!(
+                    "Failed to create directory: {e}"
+                )));
+                return;
+            }
+            match std::fs::write(&expanded, &json) {
+                Ok(()) => {
+                    agent.scrollback.push_block(RenderBlock::system(format!(
+                        "Session stats exported to {}",
+                        expanded.display()
+                    )));
+                }
+                Err(e) => {
+                    agent
+                        .scrollback
+                        .push_block(RenderBlock::system(format!("Failed to write file: {e}")));
+                }
+            }
+        } else {
+            let stats = crate::clipboard::clipboard_stats_suffix(&json);
+            let delivery = agent.copy_to_clipboard(&json);
+            let block_msg = match &delivery {
+                crate::clipboard::CopyDelivery::Clipboard { file, .. } => match file {
+                    Some(path) => format!(
+                        "Session stats copied to clipboard (also saved to {}){stats}",
+                        crate::clipboard::display_copy_path(path)
+                    ),
+                    None => format!("Session stats copied to clipboard{stats}"),
+                },
+                crate::clipboard::CopyDelivery::File { path } => format!(
+                    "Clipboard unreachable: session stats written to {}{stats}",
+                    crate::clipboard::display_copy_path(path)
+                ),
+                crate::clipboard::CopyDelivery::Failed { .. } => {
+                    format!("Session stats copy failed{stats}")
+                }
+            };
+            agent.scrollback.push_block(RenderBlock::system(block_msg));
+        }
+    });
+}
+
 /// Open the full transcript in `$PAGER`.
 ///
 /// Minimal mode renders a full-fidelity ANSI transcript: every block fully expanded (reasoning in full, tool output uncapped, diff colors kept).

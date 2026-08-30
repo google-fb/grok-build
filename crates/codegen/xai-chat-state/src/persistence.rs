@@ -11,6 +11,7 @@ use tokio::sync::{mpsc, oneshot};
 use xai_grok_sampling_types::ConversationItem;
 
 use crate::commands::{StrictAppendAck, StrictAppendError};
+use crate::usage::UsageLedger;
 
 /// Abstraction over chat-specific persistence operations.
 ///
@@ -44,6 +45,9 @@ pub trait ChatPersistence: Send + 'static {
 
     /// Flush pending writes to disk.
     fn flush(&mut self);
+
+    /// Persist the session billing ledger (`usage.json`).
+    fn persist_usage(&mut self, ledger: &UsageLedger);
 }
 
 /// Outcome of a conversation image strip, as acknowledged by the actor.
@@ -80,6 +84,8 @@ pub enum PersistenceRecord {
     ReplaceHistoryForStrip(Vec<ConversationItem>),
     /// A flush was requested.
     Flush,
+    /// The session billing ledger was persisted.
+    Usage(UsageLedger),
 }
 
 /// Test implementation: sends every call as a [`PersistenceRecord`] over a
@@ -246,6 +252,10 @@ impl ChatPersistence for MockChatPersistence {
     fn flush(&mut self) {
         let _ = self.tx.send(PersistenceRecord::Flush);
     }
+
+    fn persist_usage(&mut self, ledger: &UsageLedger) {
+        let _ = self.tx.send(PersistenceRecord::Usage(ledger.clone()));
+    }
 }
 
 // ============================================================================
@@ -275,6 +285,7 @@ impl ChatPersistence for NullChatPersistence {
         receiver
     }
     fn flush(&mut self) {}
+    fn persist_usage(&mut self, _ledger: &UsageLedger) {}
 }
 
 #[cfg(test)]

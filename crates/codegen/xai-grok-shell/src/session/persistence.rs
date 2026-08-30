@@ -285,6 +285,8 @@ pub enum PersistenceMsg {
     },
     /// Persist a snapshot of the session signals.
     Signals(SessionSignals),
+    /// Persist the session billing ledger (`usage.json`).
+    Usage(xai_chat_state::UsageLedger),
     /// Persist announcement tracking state (MCP + skill announcement dedup).
     AnnouncementState(crate::session::announcement_state::AnnouncementState),
     /// Persist goal mode orchestration state.
@@ -2225,6 +2227,11 @@ impl SessionPersistence {
                         tracing::warn!(?e, "failed to write session signals");
                     }
                 }
+                PersistenceMsg::Usage(ledger) => {
+                    if let Err(e) = self.storage.write_usage(&self.info, &ledger).await {
+                        tracing::warn!(?e, "failed to write session usage");
+                    }
+                }
                 PersistenceMsg::AnnouncementState(state) => {
                     if let Err(e) = self
                         .storage
@@ -2744,6 +2751,8 @@ pub struct PersistedInfo {
     pub rewind_points_file_path: Option<std::path::PathBuf>,
     /// Persisted session signals (None for old sessions without signals file)
     pub signals: Option<SessionSignals>,
+    /// Persisted session billing ledger (None for old sessions without usage.json)
+    pub usage: Option<xai_chat_state::UsageLedger>,
     /// Persisted announcement tracking state (None for sessions before this feature)
     pub announcement_state: Option<crate::session::announcement_state::AnnouncementState>,
     /// Persisted goal mode orchestration state (None for sessions without goal mode)
@@ -2811,6 +2820,7 @@ pub(crate) async fn load_light(
         updates_file_path,
         rewind_points_file_path,
         signals: persisted.signals,
+        usage: persisted.usage,
         announcement_state: persisted.announcement_state,
         goal_mode_state: persisted.goal_mode_state,
         workflow_runs: persisted.workflow_runs,
@@ -3278,3 +3288,7 @@ mod repo_wide_resolution_tests;
 #[cfg(test)]
 #[path = "persistence_actor_lifetime_tests.rs"]
 mod actor_lifetime_tests;
+
+#[cfg(test)]
+#[path = "usage_persist_resume_tests.rs"]
+mod usage_persist_resume_tests;

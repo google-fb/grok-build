@@ -174,7 +174,7 @@ pub(crate) fn tasks_block_text(agent: &AgentView) -> String {
     }
 }
 
-/// `/usage` body: per-session token and cost totals, covering the ledger's lifetime (since session start, or since the last `/resume`).
+/// `/usage` body: per-session token and cost totals, covering the ledger's lifetime (restored from `usage.json` across TUI restarts).
 pub(crate) fn session_usage_block_text(
     usage: &xai_grok_shell::extensions::notification::PromptUsage,
 ) -> String {

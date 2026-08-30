@@ -242,12 +242,16 @@ impl XaiProtoBuilder {
         let protoc_include_dir = find_protoc_include_dir(protoc.as_deref());
 
         let mut builder = builder.emit_rerun_if_changed(false);
-        Self::emit_rerun_if_changed(
-            protoc.as_deref(),
-            protoc_include_dir.as_deref(),
-            protos.iter().map(|p| p.as_ref()),
-            includes.iter().map(|i| i.as_ref()),
-        )?;
+        // `--dependency_out=/dev/stdout` is Unix-only; Windows protoc treats it
+        // as a path and fails. The pass only refines cargo rerun-if-changed.
+        if !cfg!(windows) {
+            Self::emit_rerun_if_changed(
+                protoc.as_deref(),
+                protoc_include_dir.as_deref(),
+                protos.iter().map(|p| p.as_ref()),
+                includes.iter().map(|i| i.as_ref()),
+            )?;
+        }
 
         let tempfile;
 

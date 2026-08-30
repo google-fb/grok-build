@@ -19,6 +19,7 @@ pub mod disk_usage_cmd;
 pub mod docs;
 pub mod doctor_cmd;
 pub mod export_cmd;
+pub mod export_json;
 pub(crate) mod fs_size;
 pub mod git_info;
 pub mod headless;

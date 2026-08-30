@@ -1075,6 +1075,7 @@ pub(crate) async fn run_shell_child(
         None,
         None,
         None,
+        None,
         Vec::new(),
         None,
         if verbatim_mirror_fork {
