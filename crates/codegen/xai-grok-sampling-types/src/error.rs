@@ -720,12 +720,12 @@ pub fn is_context_length_error(message: &str) -> bool {
         || (m.contains("current message") && m.contains("exceeds budget"))
 }
 
-/// Whether an HTTP status is worth retrying: the same 429 + any 5xx rule CCP
-/// publishes in `x-should-retry`, minus Cloudflare's origin-TLS 525/526
-/// (requests reach CCP through the Cloudflare edge, which answers with its
-/// own 52x pages when the origin is unreachable).
+/// Inference requests may recover from a 409 conflict within the sampler's
+/// existing retry budget. Keep this exception local to inference; the shared
+/// edge/server policy still treats other clients' conflicts as terminal.
+/// Callers must still honor `is_retry_vetoed()` (including x-should-retry: false).
 pub fn is_retryable_api_status(status: StatusCode) -> bool {
-    RetryPolicy::edge_client().should_retry(status.as_u16())
+    status == StatusCode::CONFLICT || RetryPolicy::edge_client().should_retry(status.as_u16())
 }
 
 /// Decide whether a [`reqwest::Error`] is worth retrying.
@@ -1653,6 +1653,18 @@ mod tests {
             retry_after_secs: None,
             should_retry: None,
             error_code: None,
+        }
+    }
+
+    #[test]
+    fn inference_conflict_is_retryable_without_broadening_other_client_errors() {
+        assert!(api_status_err(409).is_retryable());
+        assert!(!RetryPolicy::edge_client().should_retry(409));
+        for code in [400, 401, 403, 404, 408, 410, 422, 525, 526] {
+            assert!(
+                !api_status_err(code).is_retryable(),
+                "unexpected retry for {code}"
+            );
         }
     }
 

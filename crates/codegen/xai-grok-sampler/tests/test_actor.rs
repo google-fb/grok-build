@@ -375,6 +375,155 @@ async fn two_concurrent_requests_complete_with_correct_request_ids() {
     server.shutdown();
 }
 
+// HTTP conflict recovery stays inside one sampling request. Only synthetic
+// inference responses are served here; no website actions or model calls run.
+async fn conflict_server(
+    recover: bool,
+    veto: bool,
+) -> (MockServer, Arc<std::sync::Mutex<Vec<serde_json::Value>>>) {
+    use axum::response::IntoResponse;
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured = Arc::clone(&bodies);
+    let app = Router::new().route(
+        "/v1/responses",
+        post(move |body: String| {
+            let captured = Arc::clone(&captured);
+            async move {
+                let attempt = {
+                    let mut bodies = captured.lock().unwrap();
+                    bodies.push(serde_json::from_str(&body).unwrap());
+                    bodies.len()
+                };
+                if attempt == 1 || !recover {
+                    let mut response = (
+                        StatusCode::CONFLICT,
+                        json!({"error": {"message": "Request failed (HTTP 409)."}}).to_string(),
+                    )
+                        .into_response();
+                    if veto {
+                        response
+                            .headers_mut()
+                            .insert("x-should-retry", "false".parse().unwrap());
+                    }
+                    response
+                } else {
+                    let events = sse_events_to_axum(sse::responses_api_reasoning_and_text_events(
+                        "",
+                        "recovered",
+                        "test-model",
+                    ));
+                    Sse::new(stream::iter(
+                        events.into_iter().map(Ok::<_, std::convert::Infallible>),
+                    ))
+                    .into_response()
+                }
+            }
+        }),
+    );
+    (MockServer::spawn(app).await, bodies)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conflict_then_success_retries_same_request() {
+    let (server, bodies) = conflict_server(true, false).await;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let handle = SamplerActor::spawn(
+        responses_config(server.base_url(), None),
+        RetryPolicy::default(),
+        tx,
+    );
+    let id = RequestId::from("conflict-recovery");
+    handle.submit(id.clone(), user_request("hello"));
+    let events = drain_until_terminal(&mut rx, Duration::from_secs(15)).await;
+    server.shutdown();
+    assert!(events.iter().all(|event| event.request_id() == &id));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, SamplingEvent::Retrying { .. }))
+            .count(),
+        1
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, SamplingEvent::Failed { .. }))
+    );
+    match events.last().unwrap() {
+        SamplingEvent::Completed {
+            response, metrics, ..
+        } => {
+            assert_eq!(response.assistant_text(), "recovered");
+            assert_eq!(metrics.attempts, 2);
+        }
+        other => panic!("expected recovered completion, got {other:?}"),
+    }
+    let bodies = bodies.lock().unwrap();
+    assert_eq!(bodies.len(), 2);
+    assert_eq!(
+        bodies[0], bodies[1],
+        "retry must preserve the inference payload"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conflict_exhaustion_and_provider_veto_are_terminal() {
+    for (veto, expected_attempts) in [(false, 2), (true, 1)] {
+        let (server, bodies) = conflict_server(false, veto).await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let handle = SamplerActor::spawn(
+            responses_config(server.base_url(), None),
+            RetryPolicy::default(),
+            tx,
+        );
+        handle.submit(RequestId::from("conflict-exhausted"), user_request("hello"));
+        let events = drain_until_terminal(&mut rx, Duration::from_secs(15)).await;
+        server.shutdown();
+        match events.last().unwrap() {
+            SamplingEvent::Failed { error, .. } => assert_eq!(error.status_code, Some(409)),
+            other => panic!("expected terminal conflict, got {other:?}"),
+        }
+        assert_eq!(bodies.lock().unwrap().len(), expected_attempts);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, SamplingEvent::Retrying { .. }))
+                .count(),
+            expected_attempts - 1
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conflict_backoff_is_cancellable_without_another_request() {
+    let (server, bodies) = conflict_server(false, false).await;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let handle = SamplerActor::spawn(
+        responses_config(server.base_url(), None),
+        RetryPolicy::default(),
+        tx,
+    );
+    let id = RequestId::from("conflict-cancelled");
+    handle.submit(id.clone(), user_request("hello"));
+    await_event_matching(
+        &mut rx,
+        |e| matches!(e, SamplingEvent::Retrying { .. }),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("retry event before backoff");
+    handle.cancel(id);
+    let events = drain_until_terminal(&mut rx, Duration::from_secs(5)).await;
+    match events.last().unwrap() {
+        SamplingEvent::Failed { error, .. } => assert!(error.message.contains("cancelled")),
+        other => panic!("expected cancellation, got {other:?}"),
+    }
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(handle.active_count().await, 0);
+    assert_eq!(bodies.lock().unwrap().len(), 1);
+    server.shutdown();
+}
+
 // ---------------------------------------------------------------------------
 // Retry on transient transport error
 // ---------------------------------------------------------------------------
