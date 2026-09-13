@@ -383,13 +383,18 @@ async fn build_report(cwd: &Path) -> InspectReport {
             vendor_compat_status(&entry.vendor, "skills", &external_compat);
         entry.disabled |= entry.compatibility_status == Some(CompatEntryStatus::Disabled);
     }
-    let mut hooks = list_hooks(git_root.as_deref(), project_trusted, &discovered_plugins);
+    let mut hooks = list_hooks(
+        git_root.as_deref(),
+        project_trusted,
+        &discovered_plugins,
+        &plugin_registry,
+    );
     for entry in &mut hooks {
         entry.compatibility_status = vendor_compat_status(&entry.vendor, "hooks", &external_compat);
         entry.disabled |= entry.compatibility_status == Some(CompatEntryStatus::Disabled);
     }
     let agents = list_agents(cwd, &plugin_registry);
-    let plugins = list_plugins(&discovered_plugins);
+    let plugins = list_plugins(&discovered_plugins, &plugin_registry);
     let marketplaces = list_marketplaces(git_root.as_deref());
     let mut mcp = list_mcp_servers(cwd, &plugin_registry);
     for entry in &mut mcp {
@@ -693,6 +698,7 @@ fn list_hooks(
     git_root: Option<&Path>,
     project_trusted: bool,
     discovered_plugins: &[xai_grok_agent::plugins::DiscoveredPlugin],
+    plugin_registry: &xai_grok_agent::plugins::PluginRegistry,
 ) -> Vec<HookEntry> {
     let all_on = xai_grok_tools::types::compat::CompatConfig::default();
     // Route through the same assembly as session startup so config-layer hooks
@@ -752,6 +758,10 @@ fn list_hooks(
         if !p.trusted {
             continue;
         }
+        let enabled = plugin_registry
+            .get(&p.manifest.name)
+            .is_some_and(|entry| entry.enabled && entry.trusted);
+        let vendor = derive_vendor(&p.root.display().to_string()).map(String::from);
         let source = ConfigSource::Plugin {
             plugin_name: p.manifest.name.clone(),
             path: p.root.clone(),
@@ -763,8 +773,8 @@ fn list_hooks(
                 target: hooks_path.display().to_string(),
                 source,
                 matcher: None,
-                vendor: None,
-                disabled: false,
+                vendor: vendor.clone(),
+                disabled: !enabled,
                 compatibility_status: None,
             });
         } else if p.manifest.inline_hooks().is_some() {
@@ -774,8 +784,8 @@ fn list_hooks(
                 target: String::new(),
                 source,
                 matcher: None,
-                vendor: None,
-                disabled: false,
+                vendor: vendor.clone(),
+                disabled: !enabled,
                 compatibility_status: None,
             });
         }
@@ -903,7 +913,10 @@ fn list_agents(
 }
 
 /// Maps pre-discovered plugins (from `discover_plugins`) to inspect entries.
-fn list_plugins(discovered: &[xai_grok_agent::plugins::DiscoveredPlugin]) -> Vec<PluginEntry> {
+fn list_plugins(
+    discovered: &[xai_grok_agent::plugins::DiscoveredPlugin],
+    plugin_registry: &xai_grok_agent::plugins::PluginRegistry,
+) -> Vec<PluginEntry> {
     discovered
         .iter()
         .map(|p| {
@@ -917,7 +930,9 @@ fn list_plugins(discovered: &[xai_grok_agent::plugins::DiscoveredPlugin]) -> Vec
                 name: p.manifest.name.clone(),
                 scope,
                 path: p.root.display().to_string(),
-                enabled: p.trusted,
+                enabled: plugin_registry
+                    .get(&p.manifest.name)
+                    .is_some_and(|entry| entry.enabled && entry.trusted),
                 provides: PluginProvides {
                     // Count actual SKILL.md files discovered (root-level or in
                     // subdirs), not the number of configured skill dirs, so the
@@ -1682,6 +1697,53 @@ mod tests {
     use super::*;
     use xai_grok_agent::prompt::skills::{SkillInfo, SkillsConfig};
     use xai_grok_tools::implementations::skills::types::SkillScope;
+
+    #[test]
+    fn plugin_inspection_uses_effective_enablement_for_plugins_and_hooks() {
+        use xai_grok_agent::plugins::discovery::PluginId;
+        use xai_grok_agent::plugins::{
+            DiscoveredPlugin, PluginOrigin, PluginRegistry, PluginScope,
+        };
+        let root = std::path::PathBuf::from("/synthetic/plugin");
+        let plugin = DiscoveredPlugin {
+            manifest: serde_json::from_value(serde_json::json!({"name": "example"})).unwrap(),
+            id: PluginId::new(PluginScope::User, &root, "example"),
+            root: root.clone(),
+            canonical_root: root.clone(),
+            scope: PluginScope::User,
+            origin: PluginOrigin::UserGrok,
+            trusted: true,
+            skill_dirs: vec![],
+            command_dirs: vec![],
+            agent_dirs: vec![],
+            hooks_path: Some(root.join("hooks/hooks.json")),
+            mcp_config_path: None,
+            lsp_config_path: None,
+            conflict: None,
+        };
+        for enabled in [true, false] {
+            let disabled = if enabled {
+                vec![]
+            } else {
+                vec!["example".to_string()]
+            };
+            let registry = PluginRegistry::from_discovered(
+                vec![plugin.clone()],
+                &disabled,
+                &["example".to_string()],
+            );
+            let entries = list_plugins(std::slice::from_ref(&plugin), &registry);
+            assert_eq!(entries[0].enabled, enabled);
+            let hooks = list_hooks(None, true, std::slice::from_ref(&plugin), &registry);
+            let hook = hooks
+                .iter()
+                .find(|h| h.target == "/synthetic/plugin/hooks/hooks.json")
+                .unwrap();
+            assert_eq!(hook.disabled, !enabled);
+        }
+        let empty = PluginRegistry::from_discovered(vec![], &[], &[]);
+        assert!(!list_plugins(&[plugin], &empty)[0].enabled);
+    }
 
     #[test]
     fn harness_compatibility_human_output_stays_compact() {
