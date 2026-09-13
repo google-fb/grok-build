@@ -656,6 +656,39 @@ mod tests {
     }
 
     #[test]
+    fn conflict_uses_bounded_backoff_and_respects_retry_veto() {
+        let mut err = api_err_with_retry_after(StatusCode::CONFLICT, 10);
+        match classify_error(&err, 0, 3, RATE_LIMIT_RETRY_THRESHOLD) {
+            RetryDecision::RetryWithClientRebuild { backoff } => {
+                assert!((Duration::from_secs(8)..=Duration::from_secs(12)).contains(&backoff));
+            }
+            other => panic!("expected conflict retry, got {other:?}"),
+        }
+        assert!(matches!(
+            classify_error(&err, 1, 3, RATE_LIMIT_RETRY_THRESHOLD),
+            RetryDecision::Retry { .. }
+        ));
+        for (attempt, limit) in [(2, 3), (0, 0), (0, 1)] {
+            assert!(matches!(
+                classify_error(&err, attempt, limit, RATE_LIMIT_RETRY_THRESHOLD),
+                RetryDecision::Fatal(_)
+            ));
+        }
+        if let SamplingError::Api { should_retry, .. } = &mut err {
+            *should_retry = Some(false);
+        }
+        assert!(matches!(
+            classify_error(&err, 0, 3, RATE_LIMIT_RETRY_THRESHOLD),
+            RetryDecision::Fatal(_)
+        ));
+        let overflow = api_err(StatusCode::CONFLICT, "maximum context length exceeded");
+        assert!(matches!(
+            classify_error(&overflow, 0, 3, RATE_LIMIT_RETRY_THRESHOLD),
+            RetryDecision::Fatal(_)
+        ));
+    }
+
+    #[test]
     fn classify_cloudflare_522_is_retryable() {
         let err = api_err(
             StatusCode::from_u16(522).unwrap(),

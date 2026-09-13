@@ -61,6 +61,18 @@ for the version of the code present in this tree.
 
 實驗時請關記憶：`GROK_MEMORY=0` 與 `--no-memory`。不要打 `/memory on`、`/remember`、`/flush`、`/dream`。
 
+### 此修正分支：推論 API 409 重試
+
+推論 API 回傳 HTTP 409 時，沿用 sampler 的有限重試、退避等待與 jitter，
+在同一次模型請求內恢復。`GROK_MAX_RETRIES`／model 的 `max_retries` 控制既有上限；
+伺服器的 `x-should-retry: false`、context overflow、取消與重試耗盡仍會停止。
+這項修改在推論層重送請求，不會由 host 重啟對話或直接重送網站操作；
+未知的持續性 409 仍可能無法恢復。
+
+要採用必須從本分支重新編譯，已安裝的 `grok` 不會自動改變。
+正式比較應讓兩個方法使用相同凍結版本與重試設定，等待也計入既有時間上限。
+本修正的假 HTTP 測試不需要模型帳號、費用或網站測試資料。
+
 ### 用這包，不要用已安裝的 grok
 
 ```sh
