@@ -234,6 +234,7 @@ async fn completed_event_clears_slot_keeps_prior_uncommitted_segments() {
                 .handle_sampling_event(SamplingEvent::Completed {
                     request_id: req,
                     response: Box::new(ConversationResponse {
+                        provider_cost: None,
                         items: vec![ConversationItem::assistant("Answer".to_string())],
                         usage: None,
                         stop_reason: None,
@@ -326,6 +327,7 @@ async fn completed_event_releases_stream_drain_barrier_and_timeout_keeps_request
                 .handle_sampling_event(SamplingEvent::Completed {
                     request_id: RequestId::random(),
                     response: Box::new(ConversationResponse {
+                        provider_cost: None,
                         items: vec![ConversationItem::assistant("unrelated".to_string())],
                         usage: None,
                         stop_reason: None,
@@ -354,6 +356,7 @@ async fn completed_event_releases_stream_drain_barrier_and_timeout_keeps_request
                 .handle_sampling_event(SamplingEvent::Completed {
                     request_id: req.clone(),
                     response: Box::new(ConversationResponse {
+                        provider_cost: None,
                         items: vec![ConversationItem::assistant("blocks".to_string())],
                         usage: None,
                         stop_reason: None,
@@ -481,6 +484,7 @@ async fn completed_event_releases_stream_drain_barrier_and_timeout_keeps_request
                 .handle_sampling_event(SamplingEvent::Completed {
                     request_id: late_req.clone(),
                     response: Box::new(ConversationResponse {
+                        provider_cost: None,
                         items: vec![ConversationItem::assistant("late".to_string())],
                         usage: None,
                         stop_reason: None,
@@ -862,6 +866,7 @@ async fn observe_only_confident_completion_stays_warn_only() {
                 .await;
             // First completion carries confident signals — NO prior Retrying.
             let response = xai_grok_sampling_types::ConversationResponse {
+                provider_cost: None,
                 items: vec![xai_grok_sampling_types::ConversationItem::assistant(
                     "answer kept as-is",
                 )],
@@ -926,6 +931,7 @@ async fn exact_repetition_completion_is_tracked_for_incidence_only() {
             let fixture = make_replay_send_update_fixture().await;
             let actor = Arc::new(fixture.actor);
             let response = xai_grok_sampling_types::ConversationResponse {
+                provider_cost: None,
                 items: vec![xai_grok_sampling_types::ConversationItem::assistant(
                     "answer",
                 )],
@@ -1075,6 +1081,7 @@ async fn doom_loop_recovery_stamps_capture_segments_and_counters() {
                 .await;
             // Budget spent: the accepted response keeps confident signals.
             let response = xai_grok_sampling_types::ConversationResponse {
+                provider_cost: None,
                 items: vec![xai_grok_sampling_types::ConversationItem::assistant(
                     "still looping answer",
                 )],
