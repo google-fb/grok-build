@@ -1221,6 +1221,51 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn a3_openrouter_usage_baseline_preserves_tokens_but_drops_cost_and_cache_writes() {
+        let usage: Usage = serde_json::from_value(json!({
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "total_tokens": 120,
+            "prompt_tokens_details": {"cached_tokens": 30, "cache_write_tokens": 5},
+            "completion_tokens_details": {"reasoning_tokens": 7},
+            "cost": 0.0123,
+            "cost_details": {"upstream_inference_cost": 0.01}
+        }))
+        .unwrap();
+        let serialized = serde_json::to_value(&usage).unwrap();
+        // These assertions document the baseline gap. Update them when A4 adds support.
+        assert!(serialized.get("cost").is_none());
+        assert!(
+            serialized["prompt_tokens_details"]
+                .get("cache_write_tokens")
+                .is_none()
+        );
+        assert_eq!(usage.cost_in_usd_ticks, None);
+        let tokens: crate::TokenUsage = usage.into();
+        assert_eq!(tokens.prompt_tokens, 100);
+        assert_eq!(tokens.completion_tokens, 20);
+        assert_eq!(tokens.cached_prompt_tokens, 30);
+        assert_eq!(tokens.reasoning_tokens, 7);
+        assert_eq!(tokens.cache_creation_prompt_tokens, 0);
+    }
+
+    #[test]
+    fn a3_vllm_style_usage_has_unknown_cost_not_zero() {
+        let usage: Usage = serde_json::from_value(json!({
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "total_tokens": 120,
+            "prompt_tokens_details": {"cached_tokens": 30},
+            "completion_tokens_details": {"reasoning_tokens": 7}
+        }))
+        .unwrap();
+        assert_eq!(usage.cost_in_usd_ticks, None);
+        let tokens: crate::TokenUsage = usage.into();
+        assert_eq!(tokens.reasoning_tokens, 7);
+        assert_eq!(tokens.cached_prompt_tokens, 30);
+    }
+
+    #[test]
     fn reasoning_effort_serde_lowercase_round_trip() {
         for v in [
             ReasoningEffort::None,

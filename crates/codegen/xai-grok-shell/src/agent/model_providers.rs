@@ -230,6 +230,68 @@ impl ConfigModelOverride {
 #[cfg(test)]
 mod tests {
     use crate::agent::config::{Config, resolve_credentials, resolve_model_list};
+
+    #[test]
+    #[serial_test::serial]
+    fn a3_provider_triplet_uses_configured_key_and_standard_backend() {
+        let _key = xai_grok_test_support::EnvGuard::set(
+            "ASTRA_A3_SYNTHETIC_PROVIDER_KEY",
+            "synthetic-provider-key",
+        );
+        let raw: toml::Value = toml::from_str(
+            r#"
+            [model_providers.generic]
+            base_url = "https://provider.example/v1"
+            env_key = "ASTRA_A3_SYNTHETIC_PROVIDER_KEY"
+
+            [model.generic-model]
+            model_provider = "generic"
+            model = "vendor/model"
+            "#,
+        )
+        .unwrap();
+        let cfg = Config::new_from_toml_cfg(&raw).unwrap();
+        let models = resolve_model_list(&cfg, None);
+        let model = &models["generic-model"];
+        let credentials = resolve_credentials(model, Some("synthetic-session-token"));
+        assert_eq!(model.info.model, "vendor/model");
+        assert_eq!(credentials.base_url, "https://provider.example/v1");
+        assert_eq!(credentials.api_key.as_deref(), Some("synthetic-provider-key"));
+        assert_eq!(
+            model.info.api_backend,
+            crate::sampling::ApiBackend::ChatCompletions
+        );
+        assert!(!model.info.supports_reasoning_effort);
+        assert!(!model.info.supports_backend_search);
+        assert_eq!(model.info.stream_tool_calls, None);
+        // Existing fallback, not a discovered capability of the remote model.
+        assert_eq!(model.info.context_window.get(), 200_000);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a3_missing_provider_key_does_not_fall_back_to_global_xai_key() {
+        let _missing = xai_grok_test_support::EnvGuard::unset("ASTRA_A3_UNSET_KEY");
+        let _global = xai_grok_test_support::EnvGuard::set("XAI_API_KEY", "synthetic-global-key");
+        let raw: toml::Value = toml::from_str(
+            r#"
+            [model_providers.generic]
+            base_url = "https://provider.example/v1"
+            env_key = "ASTRA_A3_UNSET_KEY"
+
+            [model.generic-model]
+            model_provider = "generic"
+            model = "vendor/model"
+            "#,
+        )
+        .unwrap();
+        let cfg = Config::new_from_toml_cfg(&raw).unwrap();
+        let models = resolve_model_list(&cfg, None);
+        let credentials = resolve_credentials(&models["generic-model"], Some("synthetic-session"));
+        assert_eq!(credentials.api_key, None);
+        assert_eq!(credentials.base_url, "https://provider.example/v1");
+    }
+
     #[test]
     fn model_inherits_provider_connection_defaults() {
         let raw_config: toml::Value = toml::from_str(
