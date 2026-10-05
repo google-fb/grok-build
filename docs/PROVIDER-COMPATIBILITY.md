@@ -105,9 +105,11 @@ These paths are in the bench repository, inspected as source only:
 - The runtime driver uses `streaming-messages-json`
   (`harness/full-workflow/run.py:174`), so only fixing plain JSON is insufficient.
 - `harness/full-workflow/finalize.py:130–131`,
-  `harness/parallel-workflow/build-report.py:40–41`, and
-  `harness/full-workflow/assemble-delivery.py:94` forward the accounting
+  and `harness/parallel-workflow/build-report.py:40–41` forward the accounting
   summary. Carry new amount source/unit fields through these consumers too.
+  `harness/full-workflow/assemble-delivery.py:94` instead writes a fixed null
+  amount and false completeness; it is an intentionally unpriced surface,
+  not evidence that the amount/source reached the assembled delivery.
 
 ## Reproducible checks
 
