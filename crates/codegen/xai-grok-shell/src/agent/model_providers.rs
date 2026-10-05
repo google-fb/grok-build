@@ -293,6 +293,35 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
+    fn a3_direct_model_baseline_falls_back_to_xai_credentials() {
+        let _missing = xai_grok_test_support::EnvGuard::unset("ASTRA_A3_UNSET_KEY");
+        let _global = xai_grok_test_support::EnvGuard::set("XAI_API_KEY", "synthetic-global-key");
+        let raw: toml::Value = toml::from_str(
+            r#"
+            [model.direct]
+            base_url = "https://provider.example/v1"
+            env_key = "ASTRA_A3_UNSET_KEY"
+            model = "vendor/model"
+            "#,
+        )
+        .unwrap();
+        let cfg = Config::new_from_toml_cfg(&raw).unwrap();
+        let models = resolve_model_list(&cfg, None);
+        // Baseline gap: direct model settings omit the group fail-closed guard.
+        // A4 must update these assertions when introducing the chosen policy,
+        // including the existing explicit custom-gateway use case.
+        for (session, expected) in [
+            (Some("synthetic-session"), "synthetic-session"),
+            (None, "synthetic-global-key"),
+        ] {
+            let credentials = resolve_credentials(&models["direct"], session);
+            assert_eq!(credentials.api_key.as_deref(), Some(expected));
+            assert_eq!(credentials.base_url, "https://provider.example/v1");
+        }
+    }
+
+    #[test]
     fn model_inherits_provider_connection_defaults() {
         let raw_config: toml::Value = toml::from_str(
             r#"

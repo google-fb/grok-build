@@ -10,7 +10,7 @@ implementation. The older external fork was not consulted.
 |---|---|---|
 | Provider groups with base URL and key environment-variable name | `xai-grok-shell/src/agent/model_providers.rs:7–24,170–216` | `[model_providers.<id>]` already exists; models select it using `model_provider` |
 | A model slug plus provider connection settings | `xai-grok-shell/src/agent/config.rs:4038–4056,4090–4115` | A new model defaults to a 200,000-token context window if omitted (`:3595`); this is an assumption, not remote discovery |
-| Provider credentials remain separate from session credentials | `config.rs:3611–3631,4867–4928` | Provider groups install a fail-closed credential reference; unresolved provider keys do not fall back to a session/global key |
+| Provider-group credentials remain separate from session credentials | `config.rs:3611–3631,4867–4928` | Only models selecting a provider group receive the fail-closed credential reference; this does not cover direct model-level connection settings |
 | Standard Chat Completions transport | `xai-grok-sampling-types/src/types.rs:1018–1030`; `xai-grok-sampler/src/client.rs:1014–1068` | Default backend is `chat_completions`; POST goes to the configured base plus `chat/completions` |
 | Streaming with usage request | `xai-grok-sampler/src/client.rs:288–304,1038–1044` | `stream=true` and `stream_options.include_usage=true` are already sent |
 | Function tool calls | `xai-grok-sampling-types/src/types.rs:80–83,398–434`; `xai-grok-sampler/src/stream/chat_completions.rs:75–82,177–223` | Accumulates tool-call deltas by index; actual server/model support must still be tested |
@@ -40,6 +40,7 @@ measure the existing fallback. The example above explicitly supplies one.
 
 | Gap | Evidence | Implementation boundary |
 |---|---|---|
+| Direct model-level connection settings can fall back to xAI credentials | `xai-grok-shell/src/agent/config.rs:3616–3623,4887–4903`; `xai-grok-shell/src/auth/backend/grok.rs:31–35` | Without `model_provider`, an unset `env_key` on a third-party `[model.<id>]` can resolve to the session token or global xAI key. The existing backend intentionally allows custom gateways. A4 must address this alternative configuration shape explicitly while accounting for that existing gateway behavior |
 | OpenRouter `usage.cost` is silently discarded | `xai-grok-sampling-types/src/types.rs:540–554` only models `cost_in_usd_ticks`; `stream/chat_completions.rs:129–140` only captures ticks | Retain provider amount and its source/unit; do not infer money from token counts. Keep absent, explicit zero, and invalid cost distinct |
 | OpenRouter cache-write details are discarded | `PromptTokensDetails` (`types.rs:557`) has no `cache_write_tokens`; `conversation.rs:886` sets cache creation to zero | Preserve the optional cache-write counter and define whether/how it forms a disjoint prompt bucket |
 | Zero ticks currently mean unreported for xAI | `xai-grok-sampling-types/src/conversation.rs`, `reported_cost_ticks`; sampler cost tests | Preserve that legacy xAI interpretation separately from a provider's explicit monetary zero; do not globally reinterpret every zero as paid/free |
@@ -103,6 +104,10 @@ These paths are in the bench repository, inspected as source only:
   real money. These require explicit null/partial handling as well.
 - The runtime driver uses `streaming-messages-json`
   (`harness/full-workflow/run.py:174`), so only fixing plain JSON is insufficient.
+- `harness/full-workflow/finalize.py:130–131`,
+  `harness/parallel-workflow/build-report.py:40–41`, and
+  `harness/full-workflow/assemble-delivery.py:94` forward the accounting
+  summary. Carry new amount source/unit fields through these consumers too.
 
 ## Reproducible checks
 
@@ -112,8 +117,9 @@ Inside the isolated Rust builder, with a new or copied writable build cache:
 cargo test --locked -j 2 -p xai-grok-sampling-types -p xai-grok-shell --lib a3_ -- --test-threads=1
 ```
 
-This builds the actual source and exercises four new tests: grouped connection
-triple and conservative capability defaults, missing-key fail-closed behavior,
+This builds the actual source and exercises five new tests: grouped connection
+triple and conservative capability defaults, group missing-key fail-closed behavior,
+the direct-model credential-fallback baseline,
 OpenRouter-shaped token/cost parsing, and no-cost vLLM-shaped usage. All data is
 synthetic; no credentials, real sessions, or paid model calls are involved.
 These are library-level checks; live HTTP streaming/tool execution remains part
