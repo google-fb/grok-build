@@ -181,24 +181,27 @@ Usage notes:
   increase it. Per-model call counts (including subagents) stay on
   `modelUsage.*.modelCalls`. This is the same counter family as `--max-turns`,
   not a guarantee of exact equality when rounds lack usage or hit gates.
-- `total_cost_usd` appears only when the server reported a **complete** cost.
-  Absence means unreported or incomplete, never free. Cost is stamped for
-  API-key traffic today; pool/OAuth paths often omit it until the server
-  stamps cost. When some calls lacked cost, `cost_is_partial` is true and
-  **all** cost floats are omitted (`total_cost_usd` and every
-  `modelUsage.*.costUSD`) so consumers cannot sum model rows into a fake
-  complete bill.
-- `total_cost_usd_ticks` is the same value in exact integer ticks
-  (1 USD = 10^10 ticks) and appears under the same conditions. Use it for
-  billing reconciliation: summing per-invocation ticks matches the server's
-  usage export exactly, which float dollars cannot guarantee.
-- When subagent usage could not be applied, nested subagent usage was incomplete,
-  or the success-path drain timed out (up to 120s on the turn task),
-  `usage_is_incomplete` is true and cost floats are omitted the same way
-  (token totals may under-count subagents). Cancel snapshots without that long
-  drain and marks incomplete while subagents are still live. Incomplete with
-  no recorded tokens emits only `usage_is_incomplete` (no zero `usage` object).
-- A prompt that never reached the model omits the spend fields.
+- `total_cost_usd` is always present in a terminal result. It is a number
+  only when the provider reported the complete amount for this scope; unknown,
+  partial and incomplete amounts are `null`, never an invented zero. Explicit
+  OpenRouter `usage.cost = 0` is a known zero; legacy xAI zero ticks are unknown.
+- `cost_sources` lists `xai_usage_ticks` and/or `openrouter_usage_cost` for a
+  reported amount. `cost_unit` is `"USD"` when reported, otherwise `null`.
+  Per-model `costUSD` follows the same nullable policy, with `costSources`.
+- `total_cost_usd_ticks` is always present but non-null only for a complete
+  xAI-only amount (1 USD = 10^10 ticks). It is `null` for OpenRouter and mixed
+  providers; no USD float is converted into synthetic xAI ticks.
+- `cost_is_partial` and `usage_is_incomplete` are always booleans. Partial means
+  calls lacked a known cost; incomplete means usage could not all be applied
+  (for example incomplete subagent usage or a turn-end drain timeout). Either
+  flag withholds all terminal and per-model money as `null`; tokens can still
+  be present and may under-count. With no usage snapshot the result has
+  `usage_is_incomplete = true`, `cost_is_partial = true`, null amounts, an empty
+  source list, and no fabricated zero token totals.
+- A durable `usage.json` checkpoint can retain a known partial amount after
+  interruption. It does not certify terminal settlement. These totals exclude
+  auxiliary requests and are not a provider invoice. See [provider cost
+  contracts](../../../../../docs/PROVIDERS.md).
 
 The `sessionId` field is useful for resuming the conversation later.
 
@@ -318,9 +321,9 @@ Fidelity caveats apply to a few fields.
 
 `duration_ms` is the prompt-execution wall clock. `duration_api_ms` is the summed *reported* per-call model time. A model call that does not report its own duration contributes `0`, so `duration_api_ms` can under-count the true API time.
 
-`num_turns` and `total_cost_usd` are authoritative when known. When they are not, `num_turns` falls back to the count of completed model responses this turn, and `total_cost_usd` falls back to `0`. A completed but contentless response emits no `assistant` line, yet still counts as a turn. Spend is never overreported.
+`num_turns` falls back to the count of completed model responses this turn when the ledger count is unavailable. A completed but contentless response emits no `assistant` line, yet still counts as a turn. `total_cost_usd` is always present and follows the same nullable policy as `json`: unknown, partial or incomplete money is `null`, and only an explicit provider-reported zero is `0`. `cost_sources`, `cost_unit`, `usage_is_incomplete` and `cost_is_partial` are also always present.
 
-`modelUsage` carries the per-model token and cost fields grok tracks, plus `webSearchRequests` attributed to the active model. The reducer tracks a single global web-search count rather than per-model, so the whole count lands on the current or last model and other rows stay `0`. A per-model `modelUsage.*.costUSD` is `0` when that model's cost is unknown or withheld. This is the same fail-closed-to-zero behavior as the top-level `total_cost_usd`. The `json` format omits cost floats entirely when partial, but this stream keeps the field present and `0`. `contextWindow` is the current model's real total context window (the same value grok uses for auto-compaction), and it appears only on the current model's row. Other rows omit it, and so does the current row when the window is unknown. `maxOutputTokens` has no grok catalog, so that key is omitted entirely. `modelUsage` is `{}` when no per-model breakdown is available.
+`modelUsage` carries the per-model token and cost fields grok tracks, plus `webSearchRequests` attributed to the active model. The reducer tracks a single global web-search count rather than per-model, so the whole count lands on the current or last model and other rows stay `0`. A per-model `modelUsage.*.costUSD` is `null` when its cost is unknown or withheld, with `costSources` retaining the reported source when money is known. Both JSON formats use this same policy; consumers must not sum unknown rows as free calls. `contextWindow` is the current model's real total context window (the same value grok uses for auto-compaction), and it appears only on the current model's row. Other rows omit it, and so does the current row when the window is unknown. `maxOutputTokens` has no grok catalog, so that key is omitted entirely. `modelUsage` is `{}` when no per-model breakdown is available.
 
 Like `streaming-json`, this stream is read only. Tool approvals and other bidirectional flows use the ACP interface (`grok agent`).
 

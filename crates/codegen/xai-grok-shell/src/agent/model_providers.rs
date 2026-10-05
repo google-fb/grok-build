@@ -163,7 +163,7 @@ pub(crate) fn parse_model_providers(
                     ConfigWarningKind::InvalidValue,
                     format!(
                         "failed to parse ({error}); provider skipped, inheriting models \
-                         resolve with defaults"
+                         are rejected during config loading"
                     ),
                 ));
             }
@@ -599,69 +599,27 @@ mod tests {
     }
 
     #[test]
-    fn undefined_model_provider_fails_closed() {
-        use super::super::config_model_override_parse::{ConfigWarningKind, WarningTarget};
-
-        let raw_config: toml::Value = toml::from_str(
-            r#"
-            [model.dangling]
-            model = "m"
-            base_url = "https://third-party.example/v1"
-            context_window = 200000
-            model_provider = "ghost"
-            "#,
-        )
-        .unwrap();
-
-        let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-        assert!(
-            cfg.config_warnings.iter().any(|w| {
-                w.kind == ConfigWarningKind::InvalidValue
-                    && matches!(
-                        &w.target,
-                        WarningTarget::Model { field, .. }
-                            if field.as_deref() == Some("model_provider")
-                    )
-            }),
-            "an undefined provider reference warns: {:?}",
-            cfg.config_warnings
-        );
-        let resolved = resolve_model_list(&cfg, None);
-        let model = resolved.get("dangling").expect("model should exist");
-        assert_eq!(
-            model.info.base_url, "https://third-party.example/v1",
-            "the model keeps its own connection fields"
-        );
-        assert!(
-            model.has_own_credentials(),
-            "an undefined provider leaves the model BYOK, not session-authed"
-        );
-        let creds = resolve_credentials(model, Some("session-jwt"));
-        assert_eq!(
-            creds.api_key, None,
-            "no credential resolves and the session token does not leak to the model's base_url"
-        );
-    }
-
-    #[test]
-    fn undefined_model_provider_keeps_model_own_key() {
-        let raw_config: toml::Value = toml::from_str(
-            r#"
-            [model.own-key]
-            model = "m"
-            base_url = "https://third-party.example/v1"
-            context_window = 200000
-            api_key = "sk-model-own"
-            model_provider = "ghost"
-            "#,
-        )
-        .unwrap();
-
-        let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-        let resolved = resolve_model_list(&cfg, None);
-        let model = resolved.get("own-key").expect("model should exist");
-        let creds = resolve_credentials(model, Some("session-jwt"));
-        assert_eq!(creds.api_key.as_deref(), Some("sk-model-own"));
+    fn undefined_model_provider_fails_closed_even_with_own_key() {
+        for connection in [
+            "",
+            "base_url = \"https://third-party.example/v1\"",
+            "base_url = \"https://third-party.example/v1\"\napi_key = \"synthetic-key\"",
+        ] {
+            let raw: toml::Value = toml::from_str(&format!(
+                r#"
+                [model.dangling]
+                model = "m"
+                model_provider = "ghost"
+                {connection}
+            "#
+            ))
+            .unwrap();
+            let error = match Config::new_from_toml_cfg(&raw) {
+                Ok(_) => panic!("undefined provider must not fall back to any endpoint"),
+                Err(error) => error,
+            };
+            assert!(error.contains("ghost") && error.contains("model_provider"));
+        }
     }
 
     #[test]
@@ -680,11 +638,6 @@ mod tests {
             base_url = "https://typo.example/v1"
             unknown_field = 5
 
-            [model.on-broken-provider]
-            model = "m"
-            base_url = "https://x.example/v1"
-            context_window = 200000
-            model_provider = "bad-type"
             "#,
         )
         .unwrap();
@@ -741,6 +694,41 @@ mod tests {
             "non-table section warns: {:?}",
             cfg.config_warnings
         );
+    }
+
+    #[test]
+    fn referenced_malformed_provider_rejected_before_resolution() {
+        for (field, value) in [
+            ("provider_profile", "\"openroute-typo\""),
+            ("supports_reasoning_effort", "\"yes\""),
+            ("supports_backend_search", "\"yes\""),
+            ("stream_tool_calls", "\"yes\""),
+            ("allow_xai_credential_fallback", "\"yes\""),
+            ("api_backend", "\"typo\""),
+            ("context_window", "\"bad\""),
+        ] {
+            let raw: toml::Value = toml::from_str(&format!(
+                r#"
+                [model_providers.broken]
+                base_url = "https://provider.example/v1"
+                api_key = "synthetic-do-not-echo"
+                {field} = {value}
+                [model.test]
+                model_provider = "broken"
+                model = "synthetic-model"
+            "#
+            ))
+            .unwrap();
+            let error = match Config::new_from_toml_cfg(&raw) {
+                Ok(_) => panic!("malformed referenced provider accepted: {field}"),
+                Err(error) => error,
+            };
+            assert!(error.contains("broken") && error.contains(field), "{error}");
+            assert!(
+                !error.contains("synthetic-do-not-echo"),
+                "must not echo credentials"
+            );
+        }
     }
 
     #[test]

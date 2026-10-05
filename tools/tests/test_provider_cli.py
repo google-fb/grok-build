@@ -92,10 +92,86 @@ class Handler(http.server.BaseHTTPRequestHandler):
             pass
 
 
+def isolated_env(root, endpoint):
+    env = {'PATH': os.environ['PATH'], 'HOME': str(root/'home'), 'USERPROFILE': str(root/'home'),
+           'GROK_HOME': str(root/'grok'), 'TMPDIR': str(root/'tmp'), 'SHELL': '/bin/bash',
+           'XAI_API_KEY': 'synthetic-xai-must-not-leak',
+           'GROK_CODE_XAI_API_KEY': 'synthetic-legacy-must-not-leak',
+           'SYNTHETIC_PROVIDER_KEY': 'synthetic-provider-key',
+           'GROK_MAX_RETRIES': '0', 'GROK_TURN_SUMMARY': '0', 'GROK_PROMPT_SUGGESTIONS': 'false',
+           'GROK_DISABLE_AUTOUPDATER': '1', 'GROK_TELEMETRY_ENABLED': 'false',
+           'GROK_TELEMETRY_TRACE_UPLOAD': 'false', 'GROK_FEEDBACK_ENABLED': 'false',
+           'GROK_TRACE_UPLOAD': 'false', 'GROK_INSTRUMENTATION': 'disabled',
+           'OTEL_SDK_DISABLED': 'true', 'DISABLE_TELEMETRY': '1', 'DISABLE_FEEDBACK_COMMAND': '1',
+           'NO_PROXY': '127.0.0.1,localhost', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_TERMINAL_PROMPT': '0'}
+    for key in ('GROK_CLI_CHAT_PROXY_BASE_URL', 'GROK_XAI_API_BASE_URL', 'GROK_MODELS_BASE_URL',
+                'GROK_FEEDBACK_BASE_URL', 'GROK_TRACE_UPLOAD_URL', 'GROK_MANAGED_CONFIG_URL',
+                'GROK_CODE_WEB_URL', 'GROK_CONVERSATIONS_BASE_URL'):
+        env[key] = endpoint
+    return env
+
+
+class ProbeHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        self.server.requests.append(self.path)
+        self.send_response(400)
+        self.end_headers()
+        self.wfile.write(b'{}')
+
+    do_POST = do_GET
+
+
 class ProviderCli(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.binary = Path(os.environ['GROK_TEST_BINARY']).resolve(strict=True)
+
+    def test_invalid_provider_never_requests_either_endpoint(self):
+        for field, value in [('provider_profile', '"openroute-typo"'),
+                             ('supports_reasoning_effort', '"yes"'),
+                             ('api_backend', '"typo"'), ('model_provider', '"missing"')]:
+            with self.subTest(field=field), tempfile.TemporaryDirectory(prefix='astra-invalid-provider-') as folder:
+                root = Path(folder)
+                for name in ('home', 'grok', 'work', 'tmp'):
+                    (root/name).mkdir()
+                servers = [Server(('127.0.0.1', port), ProbeHandler) for port in (28081, 28181)]
+                threads = []
+                for server in servers:
+                    server.requests = []
+                    thread = threading.Thread(target=server.serve_forever, daemon=True)
+                    thread.start()
+                    threads.append(thread)
+                try:
+                    setting = '' if field == 'model_provider' else f'{field} = {value}'
+                    provider_id = 'missing' if field == 'model_provider' else 'synthetic'
+                    (root/'grok/config.toml').write_text(f'''[model_providers.synthetic]
+base_url = "http://127.0.0.1:28081/v1"
+api_key = "synthetic-do-not-echo"
+{setting}
+[model.synthetic]
+model_provider = "{provider_id}"
+model = "synthetic-model"
+''')
+                    result = subprocess.run([str(self.binary), '-p', 'Synthetic config check.',
+                        '--model', 'synthetic', '--output-format', 'json', '--max-turns', '1',
+                        '--disable-web-search'], cwd=root/'work', env=isolated_env(root, 'http://127.0.0.1:28181/v1'),
+                        capture_output=True, text=True, timeout=30)
+                    output = result.stdout + result.stderr
+                    self.assertNotEqual(result.returncode, 0, output)
+                    self.assertIn('synthetic', output)
+                    self.assertIn(field, output)
+                    self.assertNotIn('synthetic-do-not-echo', output)
+                    for server in servers:
+                        self.assertEqual(server.requests, [], 'invalid config must make no HTTP request')
+                finally:
+                    for server in servers:
+                        server.shutdown()
+                        server.server_close()
+                    for thread in threads:
+                        thread.join(2)
 
     def run_case(self, profile='openrouter', output='streaming-messages-json', money=None,
                  timeout=False, missing_second=False):
@@ -123,21 +199,7 @@ model_provider = "synthetic"
 model = "synthetic-model"
 context_window = 32768
 ''')
-            env = {'PATH': os.environ['PATH'], 'HOME': str(root/'home'), 'USERPROFILE': str(root/'home'),
-                   'GROK_HOME': str(root/'grok'), 'TMPDIR': str(root/'tmp'), 'SHELL': '/bin/bash',
-                   'XAI_API_KEY': 'synthetic-xai-must-not-leak',
-                   'GROK_CODE_XAI_API_KEY': 'synthetic-legacy-must-not-leak',
-                   'SYNTHETIC_PROVIDER_KEY': 'synthetic-provider-key',
-                   'GROK_MAX_RETRIES': '0', 'GROK_TURN_SUMMARY': '0', 'GROK_PROMPT_SUGGESTIONS': 'false',
-                   'GROK_DISABLE_AUTOUPDATER': '1', 'GROK_TELEMETRY_ENABLED': 'false',
-                   'GROK_TELEMETRY_TRACE_UPLOAD': 'false', 'GROK_FEEDBACK_ENABLED': 'false',
-                   'GROK_TRACE_UPLOAD': 'false', 'GROK_INSTRUMENTATION': 'disabled',
-                   'OTEL_SDK_DISABLED': 'true', 'DISABLE_TELEMETRY': '1', 'DISABLE_FEEDBACK_COMMAND': '1',
-                   'NO_PROXY': '127.0.0.1,localhost', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_TERMINAL_PROMPT': '0'}
-            for key in ('GROK_CLI_CHAT_PROXY_BASE_URL', 'GROK_XAI_API_BASE_URL', 'GROK_MODELS_BASE_URL',
-                        'GROK_FEEDBACK_BASE_URL', 'GROK_TRACE_UPLOAD_URL', 'GROK_MANAGED_CONFIG_URL',
-                        'GROK_CODE_WEB_URL', 'GROK_CONVERSATIONS_BASE_URL'):
-                env[key] = endpoint
+            env = isolated_env(root, endpoint)
             cmd = [str(self.binary), '-p', 'Synthetic protocol check.', '--model', 'synthetic',
                    '--output-format', output, '--max-turns', '3', '--permission-mode', 'bypassPermissions',
                    '--disable-web-search']

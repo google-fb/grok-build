@@ -33,14 +33,18 @@ Keys stay in the named environment variables; configuration stores their names,
 not their contents. A missing provider key does not fall back to an xAI key or
 login token. This also applies to direct `[model.<id>]` endpoint overrides,
 including a separate `api_base_url`, and to loopback endpoints. A misspelled
-provider ID is an error.
+provider ID is an error. A model referencing a declared provider with an invalid
+field (for example a misspelled profile or a non-boolean capability) is rejected
+at configuration loading, before requests; the error identifies the provider
+and field without printing credential values.
 
 The built-in xAI models use the `xai` profile. A custom model defaults to
 `compatible`; other profiles are `openrouter` and `vllm`. Only `xai` enables
 xAI-specific request headers. The optional provider fields
 `supports_reasoning_effort`, `supports_backend_search`, and `stream_tool_calls`
 default to false for custom providers; a model-level value overrides its provider
-default. `stream_tool_calls` is an xAI protocol extension, not the standard
+default. The custom default also overrides the global `[models].stream_tool_calls`
+setting. `stream_tool_calls` is an xAI protocol extension, not the standard
 Chat Completions function-call stream. Ordinary tool-call deltas work independently.
 
 An intentional xAI gateway can explicitly set
@@ -50,6 +54,20 @@ Enable it only for a trusted gateway. Protocol extensions require the independen
 `provider_profile = "xai"` choice; changing the profile alone does not grant
 credential access. Legacy sessions without a stored profile use xAI extensions
 only when their endpoint is recognized as xAI.
+
+## Service boundaries
+
+Selecting a local or third-party main model does **not** make the entire CLI
+local-only. Auxiliary summary/compaction or other side-model requests may still
+use built-in xAI models and xAI credentials. Login, settings and feedback are
+also separate services. Main-loop usage does not include those auxiliary calls;
+selecting vLLM alone is not a no-egress guarantee. Auxiliary model routing and
+accounting remain a separate scope.
+
+The TUI `/usage` block supports provider amounts. The optional external status
+line's `cost.total_cost_usd` still projects xAI ticks only; OpenRouter-only usage
+has no amount there, and mixed sessions expose the xAI subtotal rather than a
+combined provider bill. Use terminal/ledger cost sources for provider accounting.
 
 ## Usage and cost
 

@@ -1363,7 +1363,7 @@ fn resolve_credentials_empty_env_key_falls_through_to_session() {
 }
 #[test]
 #[serial]
-fn resolve_credentials_empty_env_key_falls_through_to_global_key() {
+fn resolve_credentials_empty_env_key_blocks_global_key_on_custom_endpoint() {
     use crate::agent::auth_method::{LEGACY_XAI_API_KEY_ENV_VAR, XAI_API_KEY_ENV_VAR};
     use xai_chat_state::AuthType;
     use xai_grok_test_support::EnvGuard;
@@ -1379,7 +1379,15 @@ fn resolve_credentials_empty_env_key_falls_through_to_global_key() {
     assert!(!model.has_own_credentials());
     let creds = resolve_credentials(&model, None);
     assert_eq!(creds.auth_type, AuthType::ApiKey);
-    assert_eq!(creds.api_key.as_deref(), Some(sentinel));
+    assert_eq!(
+        creds.api_key, None,
+        "custom endpoint must not inherit xAI credentials"
+    );
+    model.info.base_url = "https://api.x.ai/v1".to_owned();
+    assert_eq!(
+        resolve_credentials(&model, None).api_key.as_deref(),
+        Some(sentinel)
+    );
 }
 #[test]
 fn resolve_credentials_empty_api_key_falls_through_to_session() {
@@ -3218,7 +3226,7 @@ fn e2e_user_config_overrides_prefetched_model() {
 }
 #[test]
 #[serial]
-fn e2e_credential_priority_model_key_beats_session_beats_env() {
+fn e2e_credential_priority_is_scoped_to_trusted_endpoint() {
     let model_with_key = test_model_entry(
         "test",
         "https://custom.api/v1",
@@ -3247,13 +3255,15 @@ fn e2e_credential_priority_model_key_beats_session_beats_env() {
     let sampling = resolve_sampling(&model_no_key, Some("session-key"));
     assert_eq!(
         sampling.api_key.as_deref(),
-        Some("session-key"),
-        "session token should beat env key when model has no own credentials"
+        Some("env-key"),
+        "custom proxy cannot inherit the session; the xAI api_base_url can use the xAI API key"
     );
-    assert_eq!(
-        sampling.base_url, "https://proxy.api/v1",
-        "session auth should use base_url, not api_base_url"
-    );
+    assert_eq!(sampling.base_url, "https://api.x.ai/v1");
+    let mut opted_in = model_no_key.clone();
+    opted_in.info.allow_xai_credential_fallback = true;
+    let sampling = resolve_sampling(&opted_in, Some("session-key"));
+    assert_eq!(sampling.api_key.as_deref(), Some("session-key"));
+    assert_eq!(sampling.base_url, "https://proxy.api/v1");
     let sampling = resolve_sampling(&model_no_key, None);
     assert_eq!(
         sampling.api_key.as_deref(),

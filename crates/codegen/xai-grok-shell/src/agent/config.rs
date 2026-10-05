@@ -2035,6 +2035,51 @@ impl Config {
         } = super::config_model_override_parse::parse_model_overrides(raw_config);
         let (mut auth_providers, auth_provider_warnings) = parse_auth_providers(raw_config);
         let (model_providers, mut model_provider_warnings) = parse_model_providers(raw_config);
+        // A declared provider that failed to parse must never turn a model into
+        // a default xAI model. Reject it before auth or network startup. Keep
+        // unreferenced malformed entries as warnings for config inspection.
+        for (model_id, model) in &config_models {
+            let Some(provider_id) = model.model_provider.as_deref() else {
+                continue;
+            };
+            let Some(value) = raw_config
+                .get("model_providers")
+                .and_then(|v| v.get(provider_id))
+            else {
+                return Err(format!(
+                    "undefined model_provider \"{provider_id}\" referenced by model.\"{model_id}\"; provider configuration rejected"
+                ));
+            };
+            if !model_providers.contains_key(provider_id) {
+                // Deserialize fields separately only to identify the offending
+                // keys. Never include values (possibly credentials) in errors.
+                let fields: Vec<String> = value
+                    .as_table()
+                    .map(|table| {
+                        table
+                            .iter()
+                            .filter_map(|(field, value)| {
+                                let one = toml::Value::Table(
+                                    [(field.clone(), value.clone())].into_iter().collect(),
+                                );
+                                one.try_into::<ModelProviderConfig>()
+                                    .is_err()
+                                    .then(|| field.clone())
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let field = if fields.is_empty() {
+                    "<entry>".to_owned()
+                } else {
+                    fields.join(", ")
+                };
+                return Err(format!(
+                    "invalid model_providers.\"{provider_id}\" field {field}; referenced by model.\"{model_id}\"; provider configuration rejected"
+                ));
+            }
+        }
+
         for (id, provider) in &model_providers {
             if let Some(auth) = &provider.auth {
                 let synthetic = model_provider_auth_name(id);

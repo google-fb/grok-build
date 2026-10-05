@@ -132,7 +132,7 @@ stream_tool_calls           = true
 
 This is a small, fixed set of environment-wide knobs. Settings that identify a specific model (`model`, `base_url`, `api_key`, `context_window`, ...) cannot be defaulted this way, and a few settings with their own dedicated configuration -- auto-compaction (`[session]`), the system-prompt label (`[agent]`), and reasoning effort (`[models].default_reasoning_effort`) -- keep their existing homes.
 
-> **Note on `stream_tool_calls`:** this one affects request *shape*, not just sampling. A few endpoints (some BYOK providers) expect it left unset; if a global `stream_tool_calls = true` causes problems for such a model, opt that model out with `stream_tool_calls = false` in its `[model.<id>]` block.
+> **Note on `stream_tool_calls`:** this xAI extension affects request shape, separately from standard Chat Completions tool-call deltas. Custom models now default to `false`, which overrides a global `[models].stream_tool_calls = true`. Set the capability explicitly in `[model_providers.<id>]` or `[model.<id>]` only for an endpoint that supports it; the model-level value has priority. Built-in xAI models keep their own catalog defaults.
 
 ### Request Query Parameters
 
