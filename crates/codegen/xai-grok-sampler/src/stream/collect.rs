@@ -167,6 +167,7 @@ mod tests {
         let completed = SamplingEvent::Completed {
             request_id: rid(),
             response: Box::new(ConversationResponse {
+                provider_cost: None,
                 items: vec![ConversationItem::assistant("hi")],
                 stop_reason: Some(StopReason::Stop),
                 usage: None,

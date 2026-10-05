@@ -1052,6 +1052,7 @@ mod tests {
         content: &str,
     ) -> ConversationResponse {
         ConversationResponse {
+            provider_cost: None,
             items: vec![xai_grok_sampling_types::ConversationItem::assistant(
                 content,
             )],
