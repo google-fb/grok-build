@@ -315,11 +315,10 @@ mod tests {
 
     #[test]
     fn a4_session_usage_displays_provider_zero_but_hides_incomplete_money() {
-        use xai_grok_sampling_types::CostSource;
         let mut usage = PromptUsage { totals: model_row(10, 5, None), ..Default::default() };
-        usage.totals.cost_by_source.insert(CostSource::OpenrouterUsageCost, 0.0);
+        usage.totals.cost_by_source = serde_json::from_value(serde_json::json!({"openrouter_usage_cost": 0.0})).unwrap();
         assert!(session_usage_block_text(&usage).contains("$0.0000"));
-        usage.totals.cost_by_source.insert(CostSource::OpenrouterUsageCost, 0.2);
+        usage.totals.cost_by_source = serde_json::from_value(serde_json::json!({"openrouter_usage_cost": 0.2})).unwrap();
         assert!(session_usage_block_text(&usage).contains("$0.2000"));
         usage.usage_is_incomplete = true;
         assert!(!session_usage_block_text(&usage).contains('$'));
