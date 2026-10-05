@@ -330,7 +330,9 @@ fn result_costs(
 
 /// Valid provider-reported USD. Callers must also check the enclosing usage completeness.
 pub fn reported_cost_usd(row: &PromptUsageModel) -> Option<f64> {
-    if row.cost_is_partial { return None; }
+    if row.cost_is_partial {
+        return None;
+    }
     let costs = result_costs(row);
     if costs.is_empty() || costs.values().any(|v| !v.is_finite() || *v < 0.0) {
         return None;

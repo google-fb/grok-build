@@ -285,7 +285,10 @@ mod tests {
         let credentials = resolve_credentials(model, Some("synthetic-session-token"));
         assert_eq!(model.info.model, "vendor/model");
         assert_eq!(credentials.base_url, "https://provider.example/v1");
-        assert_eq!(credentials.api_key.as_deref(), Some("synthetic-provider-key"));
+        assert_eq!(
+            credentials.api_key.as_deref(),
+            Some("synthetic-provider-key")
+        );
         assert_eq!(
             model.info.api_backend,
             crate::sampling::ApiBackend::ChatCompletions

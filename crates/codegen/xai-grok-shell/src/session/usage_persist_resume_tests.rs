@@ -156,8 +156,7 @@ async fn usage_persist_resume_crash_keeps_first_call_only() {
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let (disk_full_tx, _disk_full_rx) = tokio::sync::watch::channel(false);
-    let sampling_client =
-        OaiCompatClient::new(xai_grok_sampler::SamplerConfig::default()).unwrap();
+    let sampling_client = OaiCompatClient::new(xai_grok_sampler::SamplerConfig::default()).unwrap();
     let summary =
         crate::session::summary::SummaryGenerator::new(crate::session::summary::SummaryConfig {
             sampling_client,
@@ -227,13 +226,7 @@ async fn usage_persist_resume_crash_keeps_first_call_only() {
     assert_eq!(restored.totals.model_calls, 1);
     assert_eq!(restored.main_loop_model_calls, 1);
     assert!(!restored.incomplete);
-    assert!(
-        !temp
-            .path()
-            .join("sessions")
-            .exists()
-            || restored.totals.input_tokens != 20
-    );
+    assert!(!temp.path().join("sessions").exists() || restored.totals.input_tokens != 20);
 }
 
 #[tokio::test]
@@ -245,10 +238,7 @@ async fn usage_persist_resume_writes_usage_json_next_to_signals() {
         .init_session(&info, crate::session::persistence::default_model_id())
         .await
         .unwrap();
-    adapter
-        .write_usage(&info, &sample_ledger())
-        .await
-        .unwrap();
+    adapter.write_usage(&info, &sample_ledger()).await.unwrap();
 
     let loaded = adapter.load_session(&info).await.unwrap();
     let session_dir = temp

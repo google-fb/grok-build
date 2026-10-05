@@ -637,7 +637,7 @@ impl SamplingClient {
                 && let Ok(header_value) = HeaderValue::from_str(client_version)
             {
                 headers.insert(
-                    HeaderName::from_static("x-grok-client-identifier"),
+                    HeaderName::from_static("x-grok-client-version"),
                     header_value,
                 );
             }

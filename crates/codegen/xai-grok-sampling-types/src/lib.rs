@@ -28,6 +28,8 @@ pub use self::error::{
     ResponseModelMetadata, Result, SamplingError, SentCredential, is_context_length_error,
     is_retryable_api_status, parse_error_code, status_user_message, user_facing_api_error_message,
 };
+pub use self::provider::*;
+pub use self::provider_cost::*;
 pub use self::tool_overrides::{
     ClearableField, MAX_WEB_SEARCH_DOMAINS, SearchDateBound, SearchDateBoundError, ToolOverrides,
     ToolOverridesUpdate, WebSearchOptions, WebSearchOptionsError, XSearchOptions,
