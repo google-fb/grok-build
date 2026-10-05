@@ -883,7 +883,10 @@ impl From<Usage> for TokenUsage {
                 .as_ref()
                 .map_or(0, |d| d.reasoning_tokens),
             cached_prompt_tokens,
-            cache_creation_prompt_tokens: u.prompt_tokens_details.as_ref().map_or(0, |d| d.cache_write_tokens),
+            cache_creation_prompt_tokens: u
+                .prompt_tokens_details
+                .as_ref()
+                .map_or(0, |d| d.cache_write_tokens),
         }
     }
 }

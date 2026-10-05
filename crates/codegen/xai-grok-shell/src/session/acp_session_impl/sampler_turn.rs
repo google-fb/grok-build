@@ -707,7 +707,8 @@ impl SessionActor {
         };
         let auth_scheme = model_facts.auth_scheme;
         let mut extra_headers = cfg.extra_headers;
-        let provider_profile = crate::agent::config::effective_provider_profile(cfg.provider_profile, &cfg.base_url);
+        let provider_profile =
+            crate::agent::config::effective_provider_profile(cfg.provider_profile, &cfg.base_url);
         if provider_profile.xai_extensions() {
             crate::agent::config::inject_url_derived_headers(
                 &mut extra_headers,

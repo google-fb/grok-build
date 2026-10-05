@@ -130,8 +130,13 @@ impl ChatStateHandle {
         api_duration_ms: Option<u64>,
         cost_usd_ticks: Option<i64>,
     ) {
-        self.record_provider_model_call_usage(model_id, usage, api_duration_ms, cost_usd_ticks,
-            xai_grok_sampling_types::ProviderCost::from_xai_ticks(cost_usd_ticks));
+        self.record_provider_model_call_usage(
+            model_id,
+            usage,
+            api_duration_ms,
+            cost_usd_ticks,
+            xai_grok_sampling_types::ProviderCost::from_xai_ticks(cost_usd_ticks),
+        );
     }
 
     pub fn record_provider_model_call_usage(

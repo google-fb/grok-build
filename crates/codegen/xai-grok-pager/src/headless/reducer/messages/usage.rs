@@ -41,7 +41,10 @@ impl MessagesReducer {
             .get("usage_is_incomplete")
             .and_then(Value::as_bool)
             .unwrap_or(end_usage.is_none());
-        let cost_is_partial = scratch.get("cost_is_partial").and_then(Value::as_bool).unwrap_or(false);
+        let cost_is_partial = scratch
+            .get("cost_is_partial")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         if end_usage.is_none() {
             tracing::warn!(
                 "streaming-messages-json: no aggregate usage ledger at turn end; \
@@ -69,11 +72,12 @@ impl MessagesReducer {
             .get("num_turns")
             .and_then(Value::as_u64)
             .unwrap_or(self.completed_responses);
-        let total_cost_usd = scratch
-            .get("total_cost_usd")
-            .and_then(Value::as_f64);
+        let total_cost_usd = scratch.get("total_cost_usd").and_then(Value::as_f64);
         let total_cost_usd_ticks = scratch.get("total_cost_usd_ticks").and_then(Value::as_i64);
-        let cost_sources = scratch.get("cost_sources").cloned().unwrap_or_else(|| json!([]));
+        let cost_sources = scratch
+            .get("cost_sources")
+            .cloned()
+            .unwrap_or_else(|| json!([]));
         let cost_unit = total_cost_usd.map(|_| "USD");
         // `apiDurationMs` is dropped by the projection, so read it from `end_usage`.
         let duration_api_ms = end_usage.map_or(0, |u| field(Some(u), "apiDurationMs"));

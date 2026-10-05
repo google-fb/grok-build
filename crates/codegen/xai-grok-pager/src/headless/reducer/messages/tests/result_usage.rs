@@ -6,11 +6,31 @@ use pretty_assertions::assert_eq;
 #[test]
 fn a4_messages_results_preserve_nullable_provider_money_and_flags() {
     for (source_map, incomplete, partial, expected) in [
-        (json!({"openrouter_usage_cost": 0.0}), false, false, json!(0.0)),
-        (json!({"openrouter_usage_cost": 0.2}), false, false, json!(0.2)),
+        (
+            json!({"openrouter_usage_cost": 0.0}),
+            false,
+            false,
+            json!(0.0),
+        ),
+        (
+            json!({"openrouter_usage_cost": 0.2}),
+            false,
+            false,
+            json!(0.2),
+        ),
         (json!({}), false, false, json!(null)),
-        (json!({"openrouter_usage_cost": 0.2}), true, false, json!(null)),
-        (json!({"openrouter_usage_cost": 0.2}), false, true, json!(null)),
+        (
+            json!({"openrouter_usage_cost": 0.2}),
+            true,
+            false,
+            json!(null),
+        ),
+        (
+            json!({"openrouter_usage_cost": 0.2}),
+            false,
+            true,
+            json!(null),
+        ),
     ] {
         let mut r = messages(false);
         let aggregate = json!({"inputTokens": 100, "outputTokens": 10,
@@ -18,12 +38,26 @@ fn a4_messages_results_preserve_nullable_provider_money_and_flags() {
             "costBySource": source_map, "usageIsIncomplete": incomplete, "costIsPartial": partial,
             "modelUsage": {"synthetic": {"inputTokens": 100, "reasoningTokens": 3,
                 "costBySource": source_map, "costIsPartial": partial, "modelCalls": 1, "apiDurationMs": 12}}});
-        let out = r.finish(&TurnEnd { stop_reason: "end_turn", session_id: "sess-1", request_id: "req-1",
-            usage: Some(&aggregate), structured_output: None, result_text: "", duration_ms: 0 });
+        let out = r.finish(&TurnEnd {
+            stop_reason: "end_turn",
+            session_id: "sess-1",
+            request_id: "req-1",
+            usage: Some(&aggregate),
+            structured_output: None,
+            result_text: "",
+            duration_ms: 0,
+        });
         let result = out.last().unwrap();
         assert_eq!(result["total_cost_usd"], expected);
         assert_eq!(result["total_cost_usd_ticks"], json!(null));
-        assert_eq!(result["cost_unit"], if expected.is_null() { json!(null) } else { json!("USD") });
+        assert_eq!(
+            result["cost_unit"],
+            if expected.is_null() {
+                json!(null)
+            } else {
+                json!("USD")
+            }
+        );
         assert_eq!(result["usage_is_incomplete"], incomplete);
         assert_eq!(result["cost_is_partial"], partial);
         assert_eq!(result["usage"]["input_tokens"], 75);

@@ -739,7 +739,10 @@ async fn read_parent_sampling_config(
         if let Some(cfg) = chat_state.get_sampling_config().await {
             let creds = chat_state.get_credentials().await;
             let mut extra_headers = cfg.extra_headers;
-            let provider_profile = crate::agent::config::effective_provider_profile(cfg.provider_profile, &cfg.base_url);
+            let provider_profile = crate::agent::config::effective_provider_profile(
+                cfg.provider_profile,
+                &cfg.base_url,
+            );
             if provider_profile.xai_extensions() {
                 crate::agent::config::inject_url_derived_headers(
                     &mut extra_headers,

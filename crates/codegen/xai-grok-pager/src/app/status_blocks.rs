@@ -208,7 +208,7 @@ pub(crate) fn session_usage_block_text(
         group_thousands(t.model_calls),
         format_duration(std::time::Duration::from_millis(t.api_duration_ms)),
     ));
-    rows.push(format!("  Cost:           {}", format_cost(t)));
+    rows.push(format!("  Cost:           {}", format_cost(t, usage.usage_is_incomplete)));
 
     if usage.model_usage.len() > 1 {
         rows.push("  By model:".to_string());
@@ -217,7 +217,7 @@ pub(crate) fn session_usage_block_text(
                 "    {model}: {} in / {} out · {}",
                 group_thousands(m.input_tokens),
                 group_thousands(m.output_tokens),
-                format_cost(m),
+                format_cost(m, usage.usage_is_incomplete),
             ));
         }
     }
@@ -232,12 +232,16 @@ pub(crate) fn session_usage_block_text(
     )
 }
 
-/// Formats the cost cell. Ticks are 1e10 per USD; a partial sum is reported as absent.
-fn format_cost(m: &xai_grok_shell::extensions::notification::PromptUsageModel) -> String {
-    use xai_grok_shell::extensions::notification::ticks_to_usd;
-    match m.cost_usd_ticks {
-        Some(ticks) => format!("${:.4}", ticks_to_usd(ticks)),
-        None if m.cost_is_partial => "not available (not reported for some calls)".to_string(),
+/// Formats provider USD; partial, incomplete and absent amounts stay unknown.
+fn format_cost(m: &xai_grok_shell::extensions::notification::PromptUsageModel, incomplete: bool) -> String {
+    if m.cost_is_partial {
+        return "not available (not reported for some calls)".to_string();
+    }
+    if incomplete {
+        return "not available (usage incomplete)".to_string();
+    }
+    match xai_grok_shell::extensions::notification::reported_cost_usd(m) {
+        Some(amount) => format!("${amount:.4}"),
         None => "not available (not reported)".to_string(),
     }
 }
@@ -287,6 +291,7 @@ mod tests {
             model_calls: 1,
             api_duration_ms: 1_000,
             cost_usd_ticks: ticks,
+            cost_by_source: Default::default(),
             cost_is_partial: false,
             cost_missing_calls: 0,
         }
@@ -306,6 +311,21 @@ mod tests {
             ..Default::default()
         };
         assert!(session_usage_block_text(&incomplete).contains("incomplete"));
+    }
+
+    #[test]
+    fn a4_session_usage_displays_provider_zero_but_hides_incomplete_money() {
+        use xai_grok_sampling_types::CostSource;
+        let mut usage = PromptUsage { totals: model_row(10, 5, None), ..Default::default() };
+        usage.totals.cost_by_source.insert(CostSource::OpenrouterUsageCost, 0.0);
+        assert!(session_usage_block_text(&usage).contains("$0.0000"));
+        usage.totals.cost_by_source.insert(CostSource::OpenrouterUsageCost, 0.2);
+        assert!(session_usage_block_text(&usage).contains("$0.2000"));
+        usage.usage_is_incomplete = true;
+        assert!(!session_usage_block_text(&usage).contains('$'));
+        usage.usage_is_incomplete = false;
+        usage.totals.cost_is_partial = true;
+        assert!(!session_usage_block_text(&usage).contains('$'));
     }
 
     #[test]

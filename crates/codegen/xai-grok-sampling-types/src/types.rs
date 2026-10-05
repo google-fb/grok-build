@@ -1242,7 +1242,10 @@ mod tests {
         .unwrap();
         let serialized = serde_json::to_value(&usage).unwrap();
         assert_eq!(serialized["cost"], json!(0.0123));
-        assert_eq!(serialized["prompt_tokens_details"]["cache_write_tokens"], json!(5));
+        assert_eq!(
+            serialized["prompt_tokens_details"]["cache_write_tokens"],
+            json!(5)
+        );
         assert_eq!(usage.cost_in_usd_ticks, None);
         let tokens: crate::TokenUsage = usage.into();
         assert_eq!(tokens.prompt_tokens, 100);

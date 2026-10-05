@@ -203,13 +203,25 @@ impl ConfigModelOverride {
         merged.api_base_url = merged.api_base_url.or_else(|| api_base_url.clone());
         merged.api_backend = merged.api_backend.or_else(|| api_backend.clone());
         merged.context_window = merged.context_window.or(*context_window);
-        merged.provider_profile = merged.provider_profile.or(*provider_profile)
+        merged.provider_profile = merged
+            .provider_profile
+            .or(*provider_profile)
             .or(Some(xai_grok_sampling_types::ProviderProfile::Compatible));
-        merged.allow_xai_credential_fallback = merged.allow_xai_credential_fallback
+        merged.allow_xai_credential_fallback = merged
+            .allow_xai_credential_fallback
             .or(*allow_xai_credential_fallback);
-        merged.supports_reasoning_effort = merged.supports_reasoning_effort.or(*supports_reasoning_effort).or(Some(false));
-        merged.supports_backend_search = merged.supports_backend_search.or(*supports_backend_search).or(Some(false));
-        merged.stream_tool_calls = merged.stream_tool_calls.or(*stream_tool_calls).or(Some(false));
+        merged.supports_reasoning_effort = merged
+            .supports_reasoning_effort
+            .or(*supports_reasoning_effort)
+            .or(Some(false));
+        merged.supports_backend_search = merged
+            .supports_backend_search
+            .or(*supports_backend_search)
+            .or(Some(false));
+        merged.stream_tool_calls = merged
+            .stream_tool_calls
+            .or(*stream_tool_calls)
+            .or(Some(false));
         // Inherited wholesale only when the model sets none of its own.
         if merged.extra_headers.is_empty() {
             merged.extra_headers = extra_headers.clone();
@@ -347,7 +359,11 @@ mod tests {
             } else {
                 xai_grok_test_support::EnvGuard::unset("GROK_CODE_XAI_API_KEY")
             };
-            for endpoint in ["https://provider.example/v1", "https://x.ai.provider.example/v1", "http://127.0.0.1:8000/v1"] {
+            for endpoint in [
+                "https://provider.example/v1",
+                "https://x.ai.provider.example/v1",
+                "http://127.0.0.1:8000/v1",
+            ] {
                 for env_line in ["", "env_key = 'ASTRA_A4_UNSET_KEY'"] {
                     let raw: toml::Value = toml::from_str(&format!(
                         "[model.direct]\nbase_url = '{endpoint}'\n{env_line}\nmodel = 'vendor/model'"
@@ -356,7 +372,10 @@ mod tests {
                     let models = resolve_model_list(&cfg, None);
                     for session in [Some("synthetic-session"), None] {
                         let credentials = resolve_credentials(&models["direct"], session);
-                        assert_eq!(credentials.api_key, None, "endpoint={endpoint}, legacy={legacy}");
+                        assert_eq!(
+                            credentials.api_key, None,
+                            "endpoint={endpoint}, legacy={legacy}"
+                        );
                     }
                 }
             }
@@ -374,7 +393,10 @@ mod tests {
             let cfg = Config::new_from_toml_cfg(&raw).unwrap();
             let models = resolve_model_list(&cfg, None);
             let credentials = resolve_credentials(&models["direct"], None);
-            assert_eq!(credentials.api_key.as_deref(), allow.then_some("synthetic-global"));
+            assert_eq!(
+                credentials.api_key.as_deref(),
+                allow.then_some("synthetic-global")
+            );
             assert_eq!(credentials.base_url, "https://gateway.example/v1");
             let credentials = resolve_credentials(&models["direct"], Some("synthetic-session"));
             assert_eq!(credentials.api_key.as_deref(), Some("synthetic-session"));
@@ -391,7 +413,8 @@ mod tests {
 
     #[test]
     fn a4_provider_capabilities_inherit_and_model_can_disable_them() {
-        let raw: toml::Value = toml::from_str(r#"
+        let raw: toml::Value = toml::from_str(
+            r#"
             [model_providers.p]
             base_url = "https://provider.example/v1"
             provider_profile = "openrouter"
@@ -405,7 +428,9 @@ mod tests {
             supports_reasoning_effort = false
             supports_backend_search = false
             stream_tool_calls = false
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
         let cfg = Config::new_from_toml_cfg(&raw).unwrap();
         let models = resolve_model_list(&cfg, None);
         let on = &models["enabled"];
@@ -415,9 +440,17 @@ mod tests {
         assert!(!off.info.supports_reasoning_effort && !off.info.supports_backend_search);
         assert_eq!(off.info.stream_tool_calls, Some(false));
         let sampler = crate::agent::config::sampling_config_for_model(
-            off, resolve_credentials(off, None), None, None, None, None,
+            off,
+            resolve_credentials(off, None),
+            None,
+            None,
+            None,
+            None,
         );
-        assert_eq!(sampler.provider_profile, xai_grok_sampling_types::ProviderProfile::Openrouter);
+        assert_eq!(
+            sampler.provider_profile,
+            xai_grok_sampling_types::ProviderProfile::Openrouter
+        );
         assert!(sampler.extra_headers.is_empty());
     }
 

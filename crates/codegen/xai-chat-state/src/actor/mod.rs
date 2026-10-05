@@ -211,7 +211,13 @@ impl ChatStateActor {
                 api_duration_ms,
                 cost_usd_ticks,
             } => {
-                self.record_model_call_usage(model_id, &usage, api_duration_ms, cost_usd_ticks, provider_cost);
+                self.record_model_call_usage(
+                    model_id,
+                    &usage,
+                    api_duration_ms,
+                    cost_usd_ticks,
+                    provider_cost,
+                );
             }
             ChatStateCommand::RecordSubagentUsage {
                 by_model,

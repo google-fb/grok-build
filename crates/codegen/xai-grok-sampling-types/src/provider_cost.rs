@@ -27,11 +27,20 @@ impl ProviderCost {
 
     /// Missing and explicit null mean unknown. A numeric zero is reported free
     /// usage. Invalid metadata is an error, never silently converted to zero.
-    pub fn from_openrouter(value: Option<&serde_json::Value>) -> Result<Option<Self>, &'static str> {
-        let Some(value) = value.filter(|v| !v.is_null()) else { return Ok(None) };
-        let usd = value.as_f64().filter(|v| v.is_finite() && *v >= 0.0)
+    pub fn from_openrouter(
+        value: Option<&serde_json::Value>,
+    ) -> Result<Option<Self>, &'static str> {
+        let Some(value) = value.filter(|v| !v.is_null()) else {
+            return Ok(None);
+        };
+        let usd = value
+            .as_f64()
+            .filter(|v| v.is_finite() && *v >= 0.0)
             .ok_or("invalid provider-reported USD amount")?;
-        Ok(Some(Self { usd, source: CostSource::OpenrouterUsageCost }))
+        Ok(Some(Self {
+            usd,
+            source: CostSource::OpenrouterUsageCost,
+        }))
     }
 }
 
@@ -43,9 +52,24 @@ mod tests {
     #[test]
     fn a4_provider_money_distinguishes_absence_zero_and_invalid() {
         assert_eq!(ProviderCost::from_openrouter(None).unwrap(), None);
-        assert_eq!(ProviderCost::from_openrouter(Some(&json!(null))).unwrap(), None);
-        assert_eq!(ProviderCost::from_openrouter(Some(&json!(0))).unwrap().unwrap().usd, 0.0);
-        assert_eq!(ProviderCost::from_openrouter(Some(&json!(0.0123))).unwrap().unwrap().usd, 0.0123);
+        assert_eq!(
+            ProviderCost::from_openrouter(Some(&json!(null))).unwrap(),
+            None
+        );
+        assert_eq!(
+            ProviderCost::from_openrouter(Some(&json!(0)))
+                .unwrap()
+                .unwrap()
+                .usd,
+            0.0
+        );
+        assert_eq!(
+            ProviderCost::from_openrouter(Some(&json!(0.0123)))
+                .unwrap()
+                .unwrap()
+                .usd,
+            0.0123
+        );
         for value in [json!(-1), json!(true), json!("0.1"), json!({}), json!([])] {
             assert!(ProviderCost::from_openrouter(Some(&value)).is_err());
         }

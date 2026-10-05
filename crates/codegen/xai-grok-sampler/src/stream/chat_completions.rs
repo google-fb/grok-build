@@ -39,8 +39,13 @@ pub fn stream_chat_completions<'a>(
     request_id: RequestId,
     idle_timeout: Duration,
 ) -> impl Stream<Item = SamplingEvent> + Send + 'a {
-    stream_chat_completions_for_provider(raw_stream, model_metadata, request_id, idle_timeout,
-        xai_grok_sampling_types::ProviderProfile::Xai)
+    stream_chat_completions_for_provider(
+        raw_stream,
+        model_metadata,
+        request_id,
+        idle_timeout,
+        xai_grok_sampling_types::ProviderProfile::Xai,
+    )
 }
 
 pub fn stream_chat_completions_for_provider<'a>(
@@ -814,7 +819,7 @@ mod tests {
         for (wire, expected) in [(Some(78), Some(78)), (Some(0), None), (None, None)] {
             let mut chunk_with_usage = make_chunk(vec![ChatChunkDelta::default()]);
             chunk_with_usage.usage = Some(Usage {
-            cost: None,
+                cost: None,
                 prompt_tokens: 10,
                 completion_tokens: 5,
                 total_tokens: 15,
@@ -900,14 +905,29 @@ mod tests {
             (ProviderProfile::Compatible, json!(0.0123), None),
         ] {
             let mut first = make_chunk(vec![]);
-            first.usage = Some(serde_json::from_value(json!({
-                "prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150,
-                "prompt_tokens_details": {"cached_tokens": 20, "cache_write_tokens": 5},
-                "completion_tokens_details": {"reasoning_tokens": 7},
-                "cost": money, "cost_in_usd_ticks": 999
-            })).unwrap());
-            let raw = stream::iter(vec![Ok(text_chunk("ok")), Ok(first), Ok(final_chunk(FinishReason::Stop))]).boxed();
-            let events = collect(stream_chat_completions_for_provider(raw, None, rid(), Duration::from_secs(60), profile)).await;
+            first.usage = Some(
+                serde_json::from_value(json!({
+                    "prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150,
+                    "prompt_tokens_details": {"cached_tokens": 20, "cache_write_tokens": 5},
+                    "completion_tokens_details": {"reasoning_tokens": 7},
+                    "cost": money, "cost_in_usd_ticks": 999
+                }))
+                .unwrap(),
+            );
+            let raw = stream::iter(vec![
+                Ok(text_chunk("ok")),
+                Ok(first),
+                Ok(final_chunk(FinishReason::Stop)),
+            ])
+            .boxed();
+            let events = collect(stream_chat_completions_for_provider(
+                raw,
+                None,
+                rid(),
+                Duration::from_secs(60),
+                profile,
+            ))
+            .await;
             match events.last().unwrap() {
                 SamplingEvent::Completed { response, .. } => {
                     assert_eq!(response.cost_usd_ticks, None);
@@ -916,8 +936,16 @@ mod tests {
                         assert_eq!(cost.source, CostSource::OpenrouterUsageCost);
                     }
                     let u = response.usage.as_ref().unwrap();
-                    assert_eq!((u.prompt_tokens, u.completion_tokens, u.cached_prompt_tokens,
-                                u.cache_creation_prompt_tokens, u.reasoning_tokens), (100, 50, 20, 5, 7));
+                    assert_eq!(
+                        (
+                            u.prompt_tokens,
+                            u.completion_tokens,
+                            u.cached_prompt_tokens,
+                            u.cache_creation_prompt_tokens,
+                            u.reasoning_tokens
+                        ),
+                        (100, 50, 20, 5, 7)
+                    );
                 }
                 other => panic!("expected Completed, got {other:?}"),
             }
@@ -929,15 +957,28 @@ mod tests {
         use serde_json::json;
         for money in [json!(-1), json!("0.1"), json!(true)] {
             let mut chunk = make_chunk(vec![]);
-            chunk.usage = Some(serde_json::from_value(json!({
-                "prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15,
-                "cost": money
-            })).unwrap());
+            chunk.usage = Some(
+                serde_json::from_value(json!({
+                    "prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15,
+                    "cost": money
+                }))
+                .unwrap(),
+            );
             let raw = stream::iter(vec![Ok(chunk), Ok(final_chunk(FinishReason::Stop))]).boxed();
-            let events = collect(stream_chat_completions_for_provider(raw, None, rid(), Duration::from_secs(60),
-                xai_grok_sampling_types::ProviderProfile::Openrouter)).await;
+            let events = collect(stream_chat_completions_for_provider(
+                raw,
+                None,
+                rid(),
+                Duration::from_secs(60),
+                xai_grok_sampling_types::ProviderProfile::Openrouter,
+            ))
+            .await;
             assert!(matches!(events.last(), Some(SamplingEvent::Failed { .. })));
-            assert!(!events.iter().any(|e| matches!(e, SamplingEvent::Completed { .. })));
+            assert!(
+                !events
+                    .iter()
+                    .any(|e| matches!(e, SamplingEvent::Completed { .. }))
+            );
         }
     }
 }

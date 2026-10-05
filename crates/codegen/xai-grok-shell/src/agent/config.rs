@@ -4105,7 +4105,8 @@ impl ConfigModelOverride {
         let mut entry = base.unwrap_or_else(|| ModelEntry::fallback(key, endpoints));
         if self.base_url.is_some() || self.api_base_url.is_some() {
             // A new endpoint must not inherit another provider's protocol extensions.
-            entry.info.provider_profile = Some(xai_grok_sampling_types::ProviderProfile::Compatible);
+            entry.info.provider_profile =
+                Some(xai_grok_sampling_types::ProviderProfile::Compatible);
             entry.info.allow_xai_credential_fallback = false;
             entry.info.supports_backend_search = false;
             entry.info.supports_reasoning_effort = false;
@@ -4915,7 +4916,8 @@ pub(crate) fn resolve_credentials(
             xai_chat_state::AuthType::ApiKey,
         )
     } else if let Some(key) = session_key
-        && (info.allow_xai_credential_fallback || crate::util::is_xai_api_bearer_url(&info.base_url))
+        && (info.allow_xai_credential_fallback
+            || crate::util::is_xai_api_bearer_url(&info.base_url))
         && crate::auth::backend::AuthBackend::may_receive_session(
             &crate::auth::backend::ActiveAuthBackend::default(),
             &info.base_url,
@@ -4931,8 +4933,13 @@ pub(crate) fn resolve_credentials(
             .api_base_url
             .clone()
             .unwrap_or_else(|| info.base_url.clone());
-        let allowed = info.allow_xai_credential_fallback || crate::util::is_xai_api_bearer_url(&url);
-        (allowed.then_some(key), url, xai_chat_state::AuthType::ApiKey)
+        let allowed =
+            info.allow_xai_credential_fallback || crate::util::is_xai_api_bearer_url(&url);
+        (
+            allowed.then_some(key),
+            url,
+            xai_chat_state::AuthType::ApiKey,
+        )
     } else {
         if let Some(ref env_keys) = model.env_key
             && !env_keys.is_empty()

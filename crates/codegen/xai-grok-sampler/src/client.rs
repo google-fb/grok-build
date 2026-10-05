@@ -62,7 +62,9 @@ struct GrokRequestHeaders<'a> {
 
 impl GrokRequestHeaders<'_> {
     fn apply(&self, builder: reqwest::RequestBuilder, enabled: bool) -> reqwest::RequestBuilder {
-        if !enabled { return builder; }
+        if !enabled {
+            return builder;
+        }
         let mut b = builder
             .header("x-grok-conv-id", self.conv_id)
             .header("x-grok-req-id", self.req_id)
@@ -630,44 +632,43 @@ impl SamplingClient {
         );
 
         if config.provider_profile.xai_extensions() {
-        // Add x-grok-client-version header for version gating at the proxy.
-        if let Some(client_version) = config.client_version.as_ref()
-            && let Ok(header_value) = HeaderValue::from_str(client_version)
-        {
-            headers.insert(
-                HeaderName::from_static("x-grok-client-version"),
-                header_value,
-            );
-        }
-
-        if let Some(deployment_id) = config.deployment_id.as_ref()
-            && let Ok(header_value) = HeaderValue::from_str(deployment_id)
-        {
-            headers.insert(
-                HeaderName::from_static("x-grok-deployment-id"),
-                header_value,
-            );
-        }
-
-        if let Some(user_id) = config.user_id.as_ref()
-            && let Ok(header_value) = HeaderValue::from_str(user_id)
-        {
-            headers.insert(HeaderName::from_static("x-grok-user-id"), header_value);
-        }
-
-        {
-            let client_id = config
-                .client_identifier
-                .clone()
-                .unwrap_or_else(|| DEFAULT_CLIENT_IDENTIFIER.to_string());
-            if let Ok(header_value) = HeaderValue::from_str(&client_id) {
+            // Add x-grok-client-version header for version gating at the proxy.
+            if let Some(client_version) = config.client_version.as_ref()
+                && let Ok(header_value) = HeaderValue::from_str(client_version)
+            {
                 headers.insert(
                     HeaderName::from_static("x-grok-client-identifier"),
                     header_value,
                 );
             }
-        }
 
+            if let Some(deployment_id) = config.deployment_id.as_ref()
+                && let Ok(header_value) = HeaderValue::from_str(deployment_id)
+            {
+                headers.insert(
+                    HeaderName::from_static("x-grok-deployment-id"),
+                    header_value,
+                );
+            }
+
+            if let Some(user_id) = config.user_id.as_ref()
+                && let Ok(header_value) = HeaderValue::from_str(user_id)
+            {
+                headers.insert(HeaderName::from_static("x-grok-user-id"), header_value);
+            }
+
+            {
+                let client_id = config
+                    .client_identifier
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_CLIENT_IDENTIFIER.to_string());
+                if let Ok(header_value) = HeaderValue::from_str(&client_id) {
+                    headers.insert(
+                        HeaderName::from_static("x-grok-client-identifier"),
+                        header_value,
+                    );
+                }
+            }
         }
         // Always set User-Agent: per-session origin if available, else fallback.
         {
@@ -1005,7 +1006,9 @@ impl SamplingClient {
             builder,
             sent_bearer,
         } = self.post(self.endpoint("chat/completions"));
-        let http_request = grok_headers.apply(builder, self.defaults.provider_profile.xai_extensions()).json(&payload);
+        let http_request = grok_headers
+            .apply(builder, self.defaults.provider_profile.xai_extensions())
+            .json(&payload);
 
         let response = http_request.send().await.map_err(|e| {
             // Log at debug level; errors are surfaced to the caller.
@@ -1290,7 +1293,9 @@ impl SamplingClient {
             builder,
             sent_bearer,
         } = self.post(self.endpoint("responses"));
-        let http_request = grok_headers.apply(builder, self.defaults.provider_profile.xai_extensions()).json(&request_body);
+        let http_request = grok_headers
+            .apply(builder, self.defaults.provider_profile.xai_extensions())
+            .json(&request_body);
 
         let response = http_request.send().await.map_err(|e| {
             tracing::debug!("HTTP request failed: {}", e);
@@ -1644,7 +1649,9 @@ impl SamplingClient {
             builder,
             sent_bearer,
         } = self.post(self.endpoint("messages"));
-        let http_request = grok_headers.apply(builder, self.defaults.provider_profile.xai_extensions()).json(&request.inner);
+        let http_request = grok_headers
+            .apply(builder, self.defaults.provider_profile.xai_extensions())
+            .json(&request.inner);
 
         let response = http_request.send().await.map_err(|e| {
             tracing::debug!("HTTP request failed: {}", e);
@@ -2142,20 +2149,34 @@ impl SamplingClient {
         let result = match self.api_backend() {
             ApiBackend::ChatCompletions => {
                 let (raw, meta) = self.conversation_stream(request).await?;
-                let events =
-                    crate::stream::stream_chat_completions_for_provider(raw, meta, request_id, idle_timeout, self.provider_profile());
-                crate::stream::collect_response(events.map(|event| crate::stream::apply_provider_cost_policy(event, self.provider_profile()))).await
+                let events = crate::stream::stream_chat_completions_for_provider(
+                    raw,
+                    meta,
+                    request_id,
+                    idle_timeout,
+                    self.provider_profile(),
+                );
+                crate::stream::collect_response(events.map(|event| {
+                    crate::stream::apply_provider_cost_policy(event, self.provider_profile())
+                }))
+                .await
             }
             ApiBackend::Responses => {
                 let (raw, meta, doom_loop) = self.conversation_stream_responses(request).await?;
                 let events =
                     crate::stream::stream_responses(raw, meta, request_id, idle_timeout, doom_loop);
-                crate::stream::collect_response(events.map(|event| crate::stream::apply_provider_cost_policy(event, self.provider_profile()))).await
+                crate::stream::collect_response(events.map(|event| {
+                    crate::stream::apply_provider_cost_policy(event, self.provider_profile())
+                }))
+                .await
             }
             ApiBackend::Messages => {
                 let (raw, meta) = self.conversation_stream_messages(request).await?;
                 let events = crate::stream::stream_messages(raw, meta, request_id, idle_timeout);
-                crate::stream::collect_response(events.map(|event| crate::stream::apply_provider_cost_policy(event, self.provider_profile()))).await
+                crate::stream::collect_response(events.map(|event| {
+                    crate::stream::apply_provider_cost_policy(event, self.provider_profile())
+                }))
+                .await
             }
         };
         let response = result

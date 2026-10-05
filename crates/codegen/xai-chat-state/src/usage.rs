@@ -31,8 +31,8 @@
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use xai_grok_sampling_types::{TokenUsage, ProviderCost, CostSource};
 use std::collections::BTreeMap;
+use xai_grok_sampling_types::{CostSource, ProviderCost, TokenUsage};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -59,9 +59,11 @@ impl UsageTotals {
         provider_cost: Option<ProviderCost>,
     ) -> Self {
         let cost_usd_ticks = xai_grok_sampling_types::reported_cost_ticks(cost_usd_ticks);
-        let reported = provider_cost.filter(|c| c.usd.is_finite() && c.usd >= 0.0)
+        let reported = provider_cost
+            .filter(|c| c.usd.is_finite() && c.usd >= 0.0)
             .or_else(|| ProviderCost::from_xai_ticks(cost_usd_ticks));
-        let cost_by_source = reported.map(|c| BTreeMap::from([(c.source, c.usd)]))
+        let cost_by_source = reported
+            .map(|c| BTreeMap::from([(c.source, c.usd)]))
             .unwrap_or_default();
         Self {
             input_tokens: u64::from(usage.prompt_tokens),
@@ -90,16 +92,20 @@ impl UsageTotals {
             ProviderCost::from_xai_ticks(self.cost_usd_ticks)
                 .map(|c| BTreeMap::from([(c.source, c.usd)]))
                 .unwrap_or_default()
-        } else { self.cost_by_source.clone() }
+        } else {
+            self.cost_by_source.clone()
+        }
     }
 
     pub fn known_cost_usd(&self) -> Option<f64> {
         let costs = self.reported_costs();
-        if costs.is_empty() || costs.values().any(|v| !v.is_finite() || *v < 0.0) { return None; }
+        if costs.is_empty() || costs.values().any(|v| !v.is_finite() || *v < 0.0) {
+            return None;
+        }
         match (costs.get(&CostSource::XaiUsageTicks), self.cost_usd_ticks) {
-            (Some(amount), Some(ticks)) if ticks > 0
-                && (*amount - ticks as f64 / 10_000_000_000.0).abs() <= 1e-10 => {},
-            (None, None) => {},
+            (Some(amount), Some(ticks))
+                if ticks > 0 && (*amount - ticks as f64 / 10_000_000_000.0).abs() <= 1e-10 => {}
+            (None, None) => {}
             _ => return None,
         }
         let value: f64 = costs.values().sum();
@@ -107,10 +113,13 @@ impl UsageTotals {
     }
 
     fn fold_totals(&mut self, other: &UsageTotals) {
-        let invalid_cost = [&*self, other].iter().any(|row|
+        let invalid_cost = [&*self, other].iter().any(|row| {
             (row.cost_usd_ticks.is_some() || !row.cost_by_source.is_empty())
-                && row.known_cost_usd().is_none());
-        let tick_overflow = self.cost_usd_ticks.zip(other.cost_usd_ticks)
+                && row.known_cost_usd().is_none()
+        });
+        let tick_overflow = self
+            .cost_usd_ticks
+            .zip(other.cost_usd_ticks)
             .is_some_and(|(a, b)| a.checked_add(b).is_none());
         let Self {
             input_tokens,
@@ -143,8 +152,10 @@ impl UsageTotals {
         if let Some(cost) = ProviderCost::from_xai_ticks(self.cost_usd_ticks) {
             self.cost_by_source.insert(cost.source, cost.usd);
         }
-        if invalid_cost || tick_overflow
-            || (!self.cost_by_source.is_empty() && self.known_cost_usd().is_none()) {
+        if invalid_cost
+            || tick_overflow
+            || (!self.cost_by_source.is_empty() && self.known_cost_usd().is_none())
+        {
             // Overflow/invalid loaded metadata cannot turn into a valid free total.
             self.cost_by_source.clear();
             self.cost_usd_ticks = None;
@@ -182,8 +193,13 @@ impl UsageLedger {
         api_duration_ms: Option<u64>,
         cost_usd_ticks: Option<i64>,
     ) {
-        self.record_provider_call(model_id, usage, api_duration_ms, cost_usd_ticks,
-            ProviderCost::from_xai_ticks(cost_usd_ticks));
+        self.record_provider_call(
+            model_id,
+            usage,
+            api_duration_ms,
+            cost_usd_ticks,
+            ProviderCost::from_xai_ticks(cost_usd_ticks),
+        );
     }
 
     pub fn record_provider_call(
@@ -240,28 +256,50 @@ mod tests {
     #[test]
     fn a4_provider_ledger_preserves_zero_unknown_mixed_sources_and_legacy() {
         let mut ledger = UsageLedger::default();
-        let usage = TokenUsage { reasoning_tokens: 3, cached_prompt_tokens: 2,
-            cache_creation_prompt_tokens: 1, ..tu(10, 5) };
-        ledger.record_provider_call("router", &usage, Some(7), None,
-            Some(ProviderCost { usd: 0.0, source: CostSource::OpenrouterUsageCost }));
+        let usage = TokenUsage {
+            reasoning_tokens: 3,
+            cached_prompt_tokens: 2,
+            cache_creation_prompt_tokens: 1,
+            ..tu(10, 5)
+        };
+        ledger.record_provider_call(
+            "router",
+            &usage,
+            Some(7),
+            None,
+            Some(ProviderCost {
+                usd: 0.0,
+                source: CostSource::OpenrouterUsageCost,
+            }),
+        );
         assert_eq!(ledger.totals.known_cost_usd(), Some(0.0));
         assert_eq!(ledger.totals.cost_missing_calls, 0);
         assert!(!ledger.totals.cost_is_partial());
-        ledger.record_provider_call("router", &usage, Some(7), None,
-            Some(ProviderCost { usd: 0.2, source: CostSource::OpenrouterUsageCost }));
+        ledger.record_provider_call(
+            "router",
+            &usage,
+            Some(7),
+            None,
+            Some(ProviderCost {
+                usd: 0.2,
+                source: CostSource::OpenrouterUsageCost,
+            }),
+        );
         ledger.record_main_loop_call("xai", &usage, Some(7), Some(1_000_000_000));
         assert!((ledger.totals.known_cost_usd().unwrap() - 0.3).abs() < 1e-12);
         assert_eq!(ledger.totals.cost_usd_ticks, Some(1_000_000_000));
         assert_eq!(ledger.totals.reasoning_tokens, 9);
         assert_eq!(ledger.totals.cache_creation_tokens, 3);
-        let restored: UsageLedger = serde_json::from_str(&serde_json::to_string(&ledger).unwrap()).unwrap();
+        let restored: UsageLedger =
+            serde_json::from_str(&serde_json::to_string(&ledger).unwrap()).unwrap();
         assert_eq!(restored, ledger);
         ledger.record_provider_call("local", &usage, None, None, None);
         assert!(ledger.totals.cost_is_partial());
         assert_eq!(ledger.totals.cost_missing_calls, 1);
         let legacy: UsageTotals = serde_json::from_value(serde_json::json!({
             "model_calls": 1, "cost_usd_ticks": 1_000_000_000
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(legacy.known_cost_usd(), Some(0.1));
         assert_eq!(legacy.reported_costs().len(), 1);
     }
@@ -274,9 +312,12 @@ mod tests {
         assert_eq!(ledger.totals.known_cost_usd(), None);
         assert_eq!(ledger.totals.cost_usd_ticks, None);
         assert_eq!(ledger.totals.cost_missing_calls, 2);
-        let invalid = UsageTotals { cost_usd_ticks: Some(10),
+        let invalid = UsageTotals {
+            cost_usd_ticks: Some(10),
             cost_by_source: BTreeMap::from([(CostSource::XaiUsageTicks, 42.0)]),
-            model_calls: 1, ..Default::default() };
+            model_calls: 1,
+            ..Default::default()
+        };
         assert_eq!(invalid.known_cost_usd(), None);
         ledger.record_subagent(&[("invalid".into(), invalid)], false);
         assert_eq!(ledger.totals.known_cost_usd(), None);

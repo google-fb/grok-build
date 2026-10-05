@@ -27,7 +27,10 @@ pub(crate) fn apply_provider_cost_policy(
         && !profile.xai_extensions()
     {
         response.cost_usd_ticks = None;
-        if response.provider_cost.is_some_and(|c| c.source == xai_grok_sampling_types::CostSource::XaiUsageTicks) {
+        if response
+            .provider_cost
+            .is_some_and(|c| c.source == xai_grok_sampling_types::CostSource::XaiUsageTicks)
+        {
             response.provider_cost = None;
         }
     }

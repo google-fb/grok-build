@@ -316,21 +316,32 @@ pub(crate) fn uncached_input_tokens(full_input: u64, cached_read: u64) -> u64 {
 /// - Cost is null when partial, incomplete or unknown (unknown ≠ free).
 /// - Incomplete with no tokens emits metadata without a zero usage object.
 /// - `modelUsage` rows retain the external camelCase schema.
-fn result_costs(row: &PromptUsageModel) -> std::collections::BTreeMap<xai_grok_sampling_types::CostSource, f64> {
+fn result_costs(
+    row: &PromptUsageModel,
+) -> std::collections::BTreeMap<xai_grok_sampling_types::CostSource, f64> {
     if row.cost_by_source.is_empty() {
         xai_grok_sampling_types::ProviderCost::from_xai_ticks(row.cost_usd_ticks)
             .map(|c| std::collections::BTreeMap::from([(c.source, c.usd)]))
             .unwrap_or_default()
-    } else { row.cost_by_source.clone() }
+    } else {
+        row.cost_by_source.clone()
+    }
 }
 
-fn result_cost_usd(row: &PromptUsageModel) -> Option<f64> {
+/// Valid provider-reported USD. Callers must also check the enclosing usage completeness.
+pub fn reported_cost_usd(row: &PromptUsageModel) -> Option<f64> {
+    if row.cost_is_partial { return None; }
     let costs = result_costs(row);
-    if costs.is_empty() || costs.values().any(|v| !v.is_finite() || *v < 0.0) { return None; }
-    match (costs.get(&xai_grok_sampling_types::CostSource::XaiUsageTicks), row.cost_usd_ticks) {
-        (Some(amount), Some(ticks)) if ticks > 0
-            && (*amount - ticks_to_usd(ticks)).abs() <= 1e-10 => {},
-        (None, None) => {},
+    if costs.is_empty() || costs.values().any(|v| !v.is_finite() || *v < 0.0) {
+        return None;
+    }
+    match (
+        costs.get(&xai_grok_sampling_types::CostSource::XaiUsageTicks),
+        row.cost_usd_ticks,
+    ) {
+        (Some(amount), Some(ticks))
+            if ticks > 0 && (*amount - ticks_to_usd(ticks)).abs() <= 1e-10 => {}
+        (None, None) => {}
         _ => return None,
     }
     let total: f64 = costs.values().sum();
@@ -344,7 +355,9 @@ pub(crate) fn project_result_usage(result: &mut serde_json::Value, usage: &Promp
     result["cost_unit"] = serde_json::Value::Null;
     result["usage_is_incomplete"] = usage.usage_is_incomplete.into();
     result["cost_is_partial"] = usage.totals.cost_is_partial.into();
-    if usage.usage_is_incomplete && usage.is_token_empty() { return; }
+    if usage.usage_is_incomplete && usage.is_token_empty() {
+        return;
+    }
 
     let t = &usage.totals;
     result["usage"] = serde_json::json!({
@@ -358,21 +371,27 @@ pub(crate) fn project_result_usage(result: &mut serde_json::Value, usage: &Promp
     });
     result["num_turns"] = usage.num_turns.into();
     let hide_costs = t.cost_is_partial || usage.usage_is_incomplete;
-    if !hide_costs && let Some(amount) = result_cost_usd(t) {
+    if !hide_costs && let Some(amount) = reported_cost_usd(t) {
         let sources = result_costs(t);
         result["total_cost_usd"] = serde_json::json!(amount);
         result["cost_sources"] = serde_json::json!(sources.keys().collect::<Vec<_>>());
         result["cost_unit"] = serde_json::json!("USD");
         // Exact integer ticks represent xAI only. Never manufacture ticks from
         // a different provider's floating-point USD amount or expose a mixed subtotal.
-        if sources.len() == 1 && sources.contains_key(&xai_grok_sampling_types::CostSource::XaiUsageTicks) {
+        if sources.len() == 1
+            && sources.contains_key(&xai_grok_sampling_types::CostSource::XaiUsageTicks)
+        {
             result["total_cost_usd_ticks"] = serde_json::json!(t.cost_usd_ticks);
         }
     }
     if !usage.model_usage.is_empty() {
         let mut model_usage = serde_json::Map::new();
         for (name, m) in &usage.model_usage {
-            let amount = if hide_costs || m.cost_is_partial { None } else { result_cost_usd(m) };
+            let amount = if hide_costs || m.cost_is_partial {
+                None
+            } else {
+                reported_cost_usd(m)
+            };
             model_usage.insert(name.clone(), serde_json::json!({
                 "inputTokens": uncached_input_tokens(m.input_tokens, m.cached_read_tokens)
                     .saturating_sub(m.cache_creation_tokens),
@@ -400,10 +419,13 @@ pub fn attach_result_usage_fail_closed(result: &mut serde_json::Value, usage: &s
                 error = %e,
                 "headless: _meta.usage failed to parse; marking usage_is_incomplete"
             );
-            project_result_usage(result, &PromptUsage {
-                usage_is_incomplete: true,
-                ..Default::default()
-            });
+            project_result_usage(
+                result,
+                &PromptUsage {
+                    usage_is_incomplete: true,
+                    ..Default::default()
+                },
+            );
         }
     }
 }
@@ -2482,9 +2504,15 @@ mod tests {
         project_result_usage(&mut result, &partial);
         assert_eq!(result["usage"]["input_tokens"], 60);
         assert_eq!(result.get("total_cost_usd"), Some(&serde_json::Value::Null));
-        assert_eq!(result.get("total_cost_usd_ticks"), Some(&serde_json::Value::Null));
+        assert_eq!(
+            result.get("total_cost_usd_ticks"),
+            Some(&serde_json::Value::Null)
+        );
         assert_eq!(result["cost_is_partial"], true);
-        assert_eq!(result["modelUsage"]["m"]["costUSD"], serde_json::Value::Null);
+        assert_eq!(
+            result["modelUsage"]["m"]["costUSD"],
+            serde_json::Value::Null
+        );
 
         let mut incomplete = PromptUsage {
             totals: PromptUsageModel {
@@ -2505,8 +2533,14 @@ mod tests {
         project_result_usage(&mut result, &incomplete);
         assert_eq!(result["usage_is_incomplete"], true);
         assert_eq!(result.get("total_cost_usd"), Some(&serde_json::Value::Null));
-        assert_eq!(result.get("total_cost_usd_ticks"), Some(&serde_json::Value::Null));
-        assert_eq!(result["modelUsage"]["m"]["costUSD"], serde_json::Value::Null);
+        assert_eq!(
+            result.get("total_cost_usd_ticks"),
+            Some(&serde_json::Value::Null)
+        );
+        assert_eq!(
+            result["modelUsage"]["m"]["costUSD"],
+            serde_json::Value::Null
+        );
     }
 
     #[test]
@@ -2535,17 +2569,34 @@ mod tests {
     fn a4_headless_provider_cost_sources_null_zero_and_mixed() {
         use xai_grok_sampling_types::{CostSource, ProviderCost, TokenUsage};
         let mut ledger = xai_chat_state::UsageLedger::default();
-        let tokens = TokenUsage { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150,
-            cached_prompt_tokens: 20, cache_creation_prompt_tokens: 5, reasoning_tokens: 7 };
+        let tokens = TokenUsage {
+            prompt_tokens: 100,
+            completion_tokens: 50,
+            total_tokens: 150,
+            cached_prompt_tokens: 20,
+            cache_creation_prompt_tokens: 5,
+            reasoning_tokens: 7,
+        };
         for amount in [Some(0.0), Some(0.2), None] {
-            ledger.record_provider_call("router", &tokens, Some(9), None,
-                amount.map(|usd| ProviderCost { usd, source: CostSource::OpenrouterUsageCost }));
+            ledger.record_provider_call(
+                "router",
+                &tokens,
+                Some(9),
+                None,
+                amount.map(|usd| ProviderCost {
+                    usd,
+                    source: CostSource::OpenrouterUsageCost,
+                }),
+            );
             let mut result = serde_json::json!({});
             project_result_usage(&mut result, &PromptUsage::from(&ledger));
             assert_eq!(result["total_cost_usd_ticks"], serde_json::Value::Null);
             if amount.is_some() {
                 assert_eq!(result["total_cost_usd"], serde_json::json!(amount));
-                assert_eq!(result["cost_sources"], serde_json::json!(["openrouter_usage_cost"]));
+                assert_eq!(
+                    result["cost_sources"],
+                    serde_json::json!(["openrouter_usage_cost"])
+                );
                 assert_eq!(result["cost_unit"], "USD");
             } else {
                 assert_eq!(result["total_cost_usd"], serde_json::Value::Null);
@@ -2554,8 +2605,16 @@ mod tests {
         }
         let mut mixed = xai_chat_state::UsageLedger::default();
         mixed.record_main_loop_call("xai", &tokens, Some(9), Some(1_000_000_000));
-        mixed.record_provider_call("router", &tokens, Some(9), None,
-            Some(ProviderCost { usd: 0.2, source: CostSource::OpenrouterUsageCost }));
+        mixed.record_provider_call(
+            "router",
+            &tokens,
+            Some(9),
+            None,
+            Some(ProviderCost {
+                usd: 0.2,
+                source: CostSource::OpenrouterUsageCost,
+            }),
+        );
         let mut result = serde_json::json!({});
         project_result_usage(&mut result, &PromptUsage::from(&mixed));
         assert!((result["total_cost_usd"].as_f64().unwrap() - 0.3).abs() < 1e-12);

@@ -461,7 +461,13 @@ impl ChatStateActor {
         self.state
             .prompt_usage
             .get_or_insert_default()
-            .record_provider_call(&model_key, usage, api_duration_ms, cost_usd_ticks, provider_cost);
+            .record_provider_call(
+                &model_key,
+                usage,
+                api_duration_ms,
+                cost_usd_ticks,
+                provider_cost,
+            );
         self.state.session_usage.record_provider_call(
             &model_key,
             usage,
