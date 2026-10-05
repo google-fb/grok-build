@@ -451,6 +451,7 @@ impl ChatStateActor {
         usage: &xai_grok_sampling_types::TokenUsage,
         api_duration_ms: Option<u64>,
         cost_usd_ticks: Option<i64>,
+        provider_cost: Option<xai_grok_sampling_types::ProviderCost>,
     ) {
         let model_key = match model_id.as_deref() {
             Some(id) if !id.is_empty() => id,
@@ -460,12 +461,13 @@ impl ChatStateActor {
         self.state
             .prompt_usage
             .get_or_insert_default()
-            .record_main_loop_call(&model_key, usage, api_duration_ms, cost_usd_ticks);
-        self.state.session_usage.record_main_loop_call(
+            .record_provider_call(&model_key, usage, api_duration_ms, cost_usd_ticks, provider_cost);
+        self.state.session_usage.record_provider_call(
             &model_key,
             usage,
             api_duration_ms,
             cost_usd_ticks,
+            provider_cost,
         );
         self.persist_session_usage();
     }

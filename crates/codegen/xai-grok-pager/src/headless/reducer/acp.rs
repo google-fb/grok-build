@@ -167,6 +167,8 @@ impl Reducer for AcpReducer {
         });
         if let Some(usage) = end.usage {
             attach_result_usage(&mut line, usage);
+        } else {
+            attach_result_usage(&mut line, &serde_json::json!({"usageIsIncomplete": true}));
         }
         attach_structured_output(&mut line, end.structured_output.clone());
         vec![line]
@@ -184,6 +186,8 @@ impl Reducer for AcpReducer {
         });
         if let Some(usage) = usage {
             attach_result_usage(&mut line, usage);
+        } else {
+            attach_result_usage(&mut line, &serde_json::json!({"usageIsIncomplete": true}));
         }
         vec![line]
     }

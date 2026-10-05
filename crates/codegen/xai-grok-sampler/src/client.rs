@@ -2143,19 +2143,19 @@ impl SamplingClient {
             ApiBackend::ChatCompletions => {
                 let (raw, meta) = self.conversation_stream(request).await?;
                 let events =
-                    crate::stream::stream_chat_completions(raw, meta, request_id, idle_timeout);
-                crate::stream::collect_response(events).await
+                    crate::stream::stream_chat_completions_for_provider(raw, meta, request_id, idle_timeout, self.provider_profile());
+                crate::stream::collect_response(events.map(|event| crate::stream::apply_provider_cost_policy(event, self.provider_profile()))).await
             }
             ApiBackend::Responses => {
                 let (raw, meta, doom_loop) = self.conversation_stream_responses(request).await?;
                 let events =
                     crate::stream::stream_responses(raw, meta, request_id, idle_timeout, doom_loop);
-                crate::stream::collect_response(events).await
+                crate::stream::collect_response(events.map(|event| crate::stream::apply_provider_cost_policy(event, self.provider_profile()))).await
             }
             ApiBackend::Messages => {
                 let (raw, meta) = self.conversation_stream_messages(request).await?;
                 let events = crate::stream::stream_messages(raw, meta, request_id, idle_timeout);
-                crate::stream::collect_response(events).await
+                crate::stream::collect_response(events.map(|event| crate::stream::apply_provider_cost_policy(event, self.provider_profile()))).await
             }
         };
         let response = result

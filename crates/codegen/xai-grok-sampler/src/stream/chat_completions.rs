@@ -39,6 +39,17 @@ pub fn stream_chat_completions<'a>(
     request_id: RequestId,
     idle_timeout: Duration,
 ) -> impl Stream<Item = SamplingEvent> + Send + 'a {
+    stream_chat_completions_for_provider(raw_stream, model_metadata, request_id, idle_timeout,
+        xai_grok_sampling_types::ProviderProfile::Xai)
+}
+
+pub fn stream_chat_completions_for_provider<'a>(
+    raw_stream: BoxStream<'a, Result<ChatCompletionChunk, SamplingError>>,
+    model_metadata: Option<ResponseModelMetadata>,
+    request_id: RequestId,
+    idle_timeout: Duration,
+    profile: xai_grok_sampling_types::ProviderProfile,
+) -> impl Stream<Item = SamplingEvent> + Send + 'a {
     async_stream::stream! {
         let stream_start = Instant::now();
         let mut chunk_timestamps: Vec<Instant> = Vec::new();
@@ -65,6 +76,7 @@ pub fn stream_chat_completions<'a>(
         let mut model_fingerprint: Option<String> = None;
         let mut usage: Option<TokenUsage> = None;
         let mut cost_usd_ticks: Option<i64> = None;
+        let mut provider_cost = None;
         let mut finish_reason: Option<StopReason> = None;
 
         let mut content_acc = String::new();
@@ -131,11 +143,30 @@ pub fn stream_chat_completions<'a>(
             if let Some(u) = chunk.usage.clone() {
                 // Wire cost is cumulative for the response, so last-write-wins.
                 // Never clobber a known cost with missing/unreported.
-                let chunk_cost = xai_grok_sampling_types::reported_cost_ticks(u.cost_in_usd_ticks);
-                cost_usd_ticks = match (cost_usd_ticks, chunk_cost) {
-                    (_, Some(n)) => Some(n),
-                    (prev, None) => prev,
+                use xai_grok_sampling_types::{ProviderCost, ProviderProfile};
+                let next_cost = match profile {
+                    ProviderProfile::Xai => {
+                        let ticks = xai_grok_sampling_types::reported_cost_ticks(u.cost_in_usd_ticks);
+                        if ticks.is_some() { cost_usd_ticks = ticks; }
+                        Ok(ProviderCost::from_xai_ticks(ticks))
+                    }
+                    ProviderProfile::Openrouter => ProviderCost::from_openrouter(u.cost.as_ref()),
+                    ProviderProfile::Compatible | ProviderProfile::Vllm => Ok(None),
                 };
+                match next_cost {
+                    Ok(Some(cost)) => provider_cost = Some(cost),
+                    Ok(None) => {},
+                    Err(message) => {
+                        let error = SamplingError::StreamError {
+                            error_type: "invalid_provider_cost".into(), message: message.into(), code: None,
+                        };
+                        yield SamplingEvent::Failed {
+                            request_id: request_id.clone(), error: SamplingErrorInfo::from(&error),
+                        };
+                        return;
+                    }
+                };
+
                 usage = Some(u.into());
             }
 
@@ -293,6 +324,7 @@ pub fn stream_chat_completions<'a>(
             InferenceLatencyStats::from_timestamps(stream_start, &chunk_timestamps, stream_end);
 
         let response = ConversationResponse {
+            provider_cost,
             items,
             stop_reason: finish_reason,
             usage,
@@ -741,6 +773,7 @@ mod tests {
     async fn usage_is_extracted_from_chunk() {
         let mut chunk_with_usage = make_chunk(vec![ChatChunkDelta::default()]);
         chunk_with_usage.usage = Some(Usage {
+            cost: None,
             prompt_tokens: 100,
             completion_tokens: 50,
             total_tokens: 150,
@@ -781,6 +814,7 @@ mod tests {
         for (wire, expected) in [(Some(78), Some(78)), (Some(0), None), (None, None)] {
             let mut chunk_with_usage = make_chunk(vec![ChatChunkDelta::default()]);
             chunk_with_usage.usage = Some(Usage {
+            cost: None,
                 prompt_tokens: 10,
                 completion_tokens: 5,
                 total_tokens: 15,
@@ -814,6 +848,7 @@ mod tests {
     async fn later_missing_cost_does_not_clobber_earlier_ticks() {
         let mut first = make_chunk(vec![ChatChunkDelta::default()]);
         first.usage = Some(Usage {
+            cost: None,
             prompt_tokens: 10,
             completion_tokens: 5,
             total_tokens: 15,
@@ -823,6 +858,7 @@ mod tests {
         });
         let mut second = make_chunk(vec![ChatChunkDelta::default()]);
         second.usage = Some(Usage {
+            cost: None,
             prompt_tokens: 12,
             completion_tokens: 6,
             total_tokens: 18,
@@ -849,6 +885,59 @@ mod tests {
                 assert_eq!(response.cost_usd_ticks, Some(99));
             }
             other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a4_stream_provider_cost_and_token_details() {
+        use serde_json::json;
+        use xai_grok_sampling_types::{CostSource, ProviderProfile};
+        for (profile, money, expected) in [
+            (ProviderProfile::Openrouter, json!(0.0123), Some(0.0123)),
+            (ProviderProfile::Openrouter, json!(0), Some(0.0)),
+            (ProviderProfile::Openrouter, json!(null), None),
+            (ProviderProfile::Vllm, json!(0.0123), None),
+            (ProviderProfile::Compatible, json!(0.0123), None),
+        ] {
+            let mut first = make_chunk(vec![]);
+            first.usage = Some(serde_json::from_value(json!({
+                "prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150,
+                "prompt_tokens_details": {"cached_tokens": 20, "cache_write_tokens": 5},
+                "completion_tokens_details": {"reasoning_tokens": 7},
+                "cost": money, "cost_in_usd_ticks": 999
+            })).unwrap());
+            let raw = stream::iter(vec![Ok(text_chunk("ok")), Ok(first), Ok(final_chunk(FinishReason::Stop))]).boxed();
+            let events = collect(stream_chat_completions_for_provider(raw, None, rid(), Duration::from_secs(60), profile)).await;
+            match events.last().unwrap() {
+                SamplingEvent::Completed { response, .. } => {
+                    assert_eq!(response.cost_usd_ticks, None);
+                    assert_eq!(response.provider_cost.map(|c| c.usd), expected);
+                    if let Some(cost) = response.provider_cost {
+                        assert_eq!(cost.source, CostSource::OpenrouterUsageCost);
+                    }
+                    let u = response.usage.as_ref().unwrap();
+                    assert_eq!((u.prompt_tokens, u.completion_tokens, u.cached_prompt_tokens,
+                                u.cache_creation_prompt_tokens, u.reasoning_tokens), (100, 50, 20, 5, 7));
+                }
+                other => panic!("expected Completed, got {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a4_invalid_provider_cost_fails_instead_of_reporting_free() {
+        use serde_json::json;
+        for money in [json!(-1), json!("0.1"), json!(true)] {
+            let mut chunk = make_chunk(vec![]);
+            chunk.usage = Some(serde_json::from_value(json!({
+                "prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15,
+                "cost": money
+            })).unwrap());
+            let raw = stream::iter(vec![Ok(chunk), Ok(final_chunk(FinishReason::Stop))]).boxed();
+            let events = collect(stream_chat_completions_for_provider(raw, None, rid(), Duration::from_secs(60),
+                xai_grok_sampling_types::ProviderProfile::Openrouter)).await;
+            assert!(matches!(events.last(), Some(SamplingEvent::Failed { .. })));
+            assert!(!events.iter().any(|e| matches!(e, SamplingEvent::Completed { .. })));
         }
     }
 }

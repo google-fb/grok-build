@@ -2111,11 +2111,12 @@ impl SessionActor {
             self.chat_state_handle
                 .record_token_usage(u64::from(u.total_tokens));
             self.chat_state_handle.record_last_turn_usage(u.clone());
-            self.chat_state_handle.record_model_call_usage(
+            self.chat_state_handle.record_provider_model_call_usage(
                 response.assistant().and_then(|a| a.model_id.clone()),
                 u.clone(),
                 api_duration_ms,
                 response.cost_usd_ticks,
+                response.provider_cost,
             );
             self.signals_handle()
                 .record_token_usage(u.completion_tokens, u.reasoning_tokens);

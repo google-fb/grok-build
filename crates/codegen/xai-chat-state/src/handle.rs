@@ -130,7 +130,20 @@ impl ChatStateHandle {
         api_duration_ms: Option<u64>,
         cost_usd_ticks: Option<i64>,
     ) {
+        self.record_provider_model_call_usage(model_id, usage, api_duration_ms, cost_usd_ticks,
+            xai_grok_sampling_types::ProviderCost::from_xai_ticks(cost_usd_ticks));
+    }
+
+    pub fn record_provider_model_call_usage(
+        &self,
+        model_id: Option<String>,
+        usage: TokenUsage,
+        api_duration_ms: Option<u64>,
+        cost_usd_ticks: Option<i64>,
+        provider_cost: Option<xai_grok_sampling_types::ProviderCost>,
+    ) {
         let _ = self.cmd_tx.send(ChatStateCommand::RecordModelCallUsage {
+            provider_cost,
             model_id,
             usage,
             api_duration_ms,
