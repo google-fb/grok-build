@@ -1043,6 +1043,9 @@ impl ApiBackend {
 /// Sampling client configuration (API key excluded — that stays in the client).
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SamplingConfig {
+    /// Persist the selected extension preset; old sessions resolve conservatively by endpoint.
+    #[serde(default)]
+    pub provider_profile: Option<crate::ProviderProfile>,
     pub base_url: String,
     pub model: String,
     pub max_completion_tokens: Option<u32>,

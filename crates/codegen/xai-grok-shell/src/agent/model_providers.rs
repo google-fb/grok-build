@@ -21,6 +21,11 @@ pub struct ModelProviderConfig {
     pub auth_provider: Option<String>,
     pub auth: Option<crate::auth::AuthProviderConfig>,
     pub context_window: Option<u64>,
+    pub provider_profile: Option<xai_grok_sampling_types::ProviderProfile>,
+    pub allow_xai_credential_fallback: Option<bool>,
+    pub supports_reasoning_effort: Option<bool>,
+    pub supports_backend_search: Option<bool>,
+    pub stream_tool_calls: Option<bool>,
 }
 
 pub(crate) fn model_provider_auth_name(provider_id: &str) -> String {
@@ -185,6 +190,11 @@ impl ConfigModelOverride {
             auth_provider,
             auth,
             context_window,
+            provider_profile,
+            allow_xai_credential_fallback,
+            supports_reasoning_effort,
+            supports_backend_search,
+            stream_tool_calls,
         } = provider;
 
         let mut merged = self.clone();
@@ -193,6 +203,13 @@ impl ConfigModelOverride {
         merged.api_base_url = merged.api_base_url.or_else(|| api_base_url.clone());
         merged.api_backend = merged.api_backend.or_else(|| api_backend.clone());
         merged.context_window = merged.context_window.or(*context_window);
+        merged.provider_profile = merged.provider_profile.or(*provider_profile)
+            .or(Some(xai_grok_sampling_types::ProviderProfile::Compatible));
+        merged.allow_xai_credential_fallback = merged.allow_xai_credential_fallback
+            .or(*allow_xai_credential_fallback);
+        merged.supports_reasoning_effort = merged.supports_reasoning_effort.or(*supports_reasoning_effort).or(Some(false));
+        merged.supports_backend_search = merged.supports_backend_search.or(*supports_backend_search).or(Some(false));
+        merged.stream_tool_calls = merged.stream_tool_calls.or(*stream_tool_calls).or(Some(false));
         // Inherited wholesale only when the model sets none of its own.
         if merged.extra_headers.is_empty() {
             merged.extra_headers = extra_headers.clone();
@@ -263,7 +280,7 @@ mod tests {
         );
         assert!(!model.info.supports_reasoning_effort);
         assert!(!model.info.supports_backend_search);
-        assert_eq!(model.info.stream_tool_calls, None);
+        assert_eq!(model.info.stream_tool_calls, Some(false));
         // Existing fallback, not a discovered capability of the remote model.
         assert_eq!(model.info.context_window.get(), 200_000);
     }
@@ -294,7 +311,7 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
-    fn a3_direct_model_baseline_falls_back_to_xai_credentials() {
+    fn a4_direct_model_missing_key_does_not_fall_back_to_xai_credentials() {
         let _missing = xai_grok_test_support::EnvGuard::unset("ASTRA_A3_UNSET_KEY");
         let _global = xai_grok_test_support::EnvGuard::set("XAI_API_KEY", "synthetic-global-key");
         let raw: toml::Value = toml::from_str(
@@ -308,17 +325,100 @@ mod tests {
         .unwrap();
         let cfg = Config::new_from_toml_cfg(&raw).unwrap();
         let models = resolve_model_list(&cfg, None);
-        // Baseline gap: direct model settings omit the group fail-closed guard.
-        // A4 must update these assertions when introducing the chosen policy,
-        // including the existing explicit custom-gateway use case.
-        for (session, expected) in [
-            (Some("synthetic-session"), "synthetic-session"),
-            (None, "synthetic-global-key"),
-        ] {
+        for session in [Some("synthetic-session"), None] {
             let credentials = resolve_credentials(&models["direct"], session);
-            assert_eq!(credentials.api_key.as_deref(), Some(expected));
+            assert_eq!(credentials.api_key, None);
             assert_eq!(credentials.base_url, "https://provider.example/v1");
         }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a4_direct_endpoints_never_inherit_xai_credentials_without_opt_in() {
+        let _missing = xai_grok_test_support::EnvGuard::unset("ASTRA_A4_UNSET_KEY");
+        for legacy in [false, true] {
+            let _new = if legacy {
+                xai_grok_test_support::EnvGuard::unset("XAI_API_KEY")
+            } else {
+                xai_grok_test_support::EnvGuard::set("XAI_API_KEY", "synthetic-global")
+            };
+            let _old = if legacy {
+                xai_grok_test_support::EnvGuard::set("GROK_CODE_XAI_API_KEY", "synthetic-global")
+            } else {
+                xai_grok_test_support::EnvGuard::unset("GROK_CODE_XAI_API_KEY")
+            };
+            for endpoint in ["https://provider.example/v1", "https://x.ai.provider.example/v1", "http://127.0.0.1:8000/v1"] {
+                for env_line in ["", "env_key = 'ASTRA_A4_UNSET_KEY'"] {
+                    let raw: toml::Value = toml::from_str(&format!(
+                        "[model.direct]\nbase_url = '{endpoint}'\n{env_line}\nmodel = 'vendor/model'"
+                    )).unwrap();
+                    let cfg = Config::new_from_toml_cfg(&raw).unwrap();
+                    let models = resolve_model_list(&cfg, None);
+                    for session in [Some("synthetic-session"), None] {
+                        let credentials = resolve_credentials(&models["direct"], session);
+                        assert_eq!(credentials.api_key, None, "endpoint={endpoint}, legacy={legacy}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a4_api_base_url_and_explicit_gateway_policy() {
+        let _key = xai_grok_test_support::EnvGuard::set("XAI_API_KEY", "synthetic-global");
+        for allow in [false, true] {
+            let raw: toml::Value = toml::from_str(&format!(
+                "[model.direct]\nbase_url = 'https://api.x.ai/v1'\napi_base_url = 'https://gateway.example/v1'\nallow_xai_credential_fallback = {allow}"
+            )).unwrap();
+            let cfg = Config::new_from_toml_cfg(&raw).unwrap();
+            let models = resolve_model_list(&cfg, None);
+            let credentials = resolve_credentials(&models["direct"], None);
+            assert_eq!(credentials.api_key.as_deref(), allow.then_some("synthetic-global"));
+            assert_eq!(credentials.base_url, "https://gateway.example/v1");
+            let credentials = resolve_credentials(&models["direct"], Some("synthetic-session"));
+            assert_eq!(credentials.api_key.as_deref(), Some("synthetic-session"));
+            assert_eq!(credentials.base_url, "https://api.x.ai/v1");
+        }
+        let raw: toml::Value = toml::from_str(
+            "[model.gateway]\nbase_url = 'https://gateway.example/v1'\nallow_xai_credential_fallback = true\nprovider_profile = 'xai'"
+        ).unwrap();
+        let cfg = Config::new_from_toml_cfg(&raw).unwrap();
+        let models = resolve_model_list(&cfg, None);
+        let credentials = resolve_credentials(&models["gateway"], Some("synthetic-session"));
+        assert_eq!(credentials.api_key.as_deref(), Some("synthetic-session"));
+    }
+
+    #[test]
+    fn a4_provider_capabilities_inherit_and_model_can_disable_them() {
+        let raw: toml::Value = toml::from_str(r#"
+            [model_providers.p]
+            base_url = "https://provider.example/v1"
+            provider_profile = "openrouter"
+            supports_reasoning_effort = true
+            supports_backend_search = true
+            stream_tool_calls = true
+            [model.enabled]
+            model_provider = "p"
+            [model.disabled]
+            model_provider = "p"
+            supports_reasoning_effort = false
+            supports_backend_search = false
+            stream_tool_calls = false
+        "#).unwrap();
+        let cfg = Config::new_from_toml_cfg(&raw).unwrap();
+        let models = resolve_model_list(&cfg, None);
+        let on = &models["enabled"];
+        assert!(on.info.supports_reasoning_effort && on.info.supports_backend_search);
+        assert_eq!(on.info.stream_tool_calls, Some(true));
+        let off = &models["disabled"];
+        assert!(!off.info.supports_reasoning_effort && !off.info.supports_backend_search);
+        assert_eq!(off.info.stream_tool_calls, Some(false));
+        let sampler = crate::agent::config::sampling_config_for_model(
+            off, resolve_credentials(off, None), None, None, None, None,
+        );
+        assert_eq!(sampler.provider_profile, xai_grok_sampling_types::ProviderProfile::Openrouter);
+        assert!(sampler.extra_headers.is_empty());
     }
 
     #[test]

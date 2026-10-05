@@ -10,12 +10,14 @@ pub mod conversation;
 pub mod doom_loop;
 pub mod error;
 pub mod messages;
+pub mod provider;
 pub mod provider_error;
 pub mod serde_helpers;
 pub mod tool_overrides;
 pub mod types;
 
 pub use self::conversation::*;
+pub use self::provider::*;
 pub use self::doom_loop::{
     DEFAULT_EXACT_REPETITION_MIN_TOKENS, DOOM_LOOP_CHECK_EVENT_TYPE, DOOM_LOOP_CHECK_HEADER,
     DoomLoopPeek, DoomLoopRecoveryPolicy, DoomLoopSignal, DoomLoopSignalKind,

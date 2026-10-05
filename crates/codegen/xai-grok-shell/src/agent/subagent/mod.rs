@@ -739,11 +739,14 @@ async fn read_parent_sampling_config(
         if let Some(cfg) = chat_state.get_sampling_config().await {
             let creds = chat_state.get_credentials().await;
             let mut extra_headers = cfg.extra_headers;
-            crate::agent::config::inject_url_derived_headers(
-                &mut extra_headers,
-                creds.alpha_test_key.as_deref(),
-                &cfg.base_url,
-            );
+            let provider_profile = crate::agent::config::effective_provider_profile(cfg.provider_profile, &cfg.base_url);
+            if provider_profile.xai_extensions() {
+                crate::agent::config::inject_url_derived_headers(
+                    &mut extra_headers,
+                    creds.alpha_test_key.as_deref(),
+                    &cfg.base_url,
+                );
+            }
             let auth_scheme = crate::agent::config::try_resolve_model_credentials(&cfg.model, None)
                 .map(|r| r.auth_scheme)
                 .unwrap_or_default();
@@ -759,6 +762,7 @@ async fn read_parent_sampling_config(
                 &cfg.base_url,
             );
             let inherited = xai_grok_sampler::SamplerConfig {
+                provider_profile,
                 api_key: creds.api_key,
                 base_url: cfg.base_url,
                 model: cfg.model.clone(),

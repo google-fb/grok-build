@@ -1819,6 +1819,8 @@ async fn startup_admission_timeout_is_failed_not_cancelled() {
 fn test_model_entry(model_id: &str) -> crate::agent::config::ModelEntry {
     crate::agent::config::ModelEntry {
         info: crate::agent::config::ModelInfo {
+            allow_xai_credential_fallback: false,
+            provider_profile: Some(xai_grok_sampling_types::ProviderProfile::Xai),
             user_selectable: true,
             id: None,
             model_family: None,
@@ -2065,6 +2067,7 @@ fn normalize_forked_context_empty_parent() {
 fn test_sampling_config(model_slug: &str) -> xai_grok_sampling_types::SamplingConfig {
     use std::num::NonZeroU64;
     xai_grok_sampling_types::SamplingConfig {
+        provider_profile: Some(xai_grok_sampling_types::ProviderProfile::Xai),
         base_url: "https://api.test/v1".to_string(),
         model: model_slug.to_string(),
         max_completion_tokens: None,

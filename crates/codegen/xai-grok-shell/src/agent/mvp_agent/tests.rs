@@ -2715,6 +2715,8 @@ mod eligibility_gates {
 fn find_model_by_id_prefers_key_then_falls_back_to_slug() {
     let entry = |model: &str| ModelEntry {
         info: config::ModelInfo {
+            allow_xai_credential_fallback: false,
+            provider_profile: Some(xai_grok_sampling_types::ProviderProfile::Xai),
             user_selectable: true,
             id: None,
             model_family: None,

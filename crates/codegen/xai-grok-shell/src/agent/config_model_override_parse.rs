@@ -681,6 +681,8 @@ mod tests {
     /// here until the drift-guard tests cover it.
     fn fully_populated_override() -> ConfigModelOverride {
         ConfigModelOverride {
+            allow_xai_credential_fallback: None,
+            provider_profile: None,
             model: Some("m".into()),
             model_family: None,
             base_url: Some("https://example.com".into()),

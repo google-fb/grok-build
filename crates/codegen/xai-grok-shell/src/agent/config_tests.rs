@@ -1035,6 +1035,8 @@ fn test_model_entry(
 ) -> ModelEntry {
     ModelEntry {
         info: ModelInfo {
+            allow_xai_credential_fallback: false,
+            provider_profile: Some(xai_grok_sampling_types::ProviderProfile::Xai),
             user_selectable: true,
             id: None,
             model_family: None,
@@ -6709,6 +6711,8 @@ fn slug_propagation_noop_when_no_donor() {
 fn prefetch_model_entry(slug: &str, context_window: u64, api_backend: ApiBackend) -> ModelEntry {
     ModelEntry {
         info: ModelInfo {
+            allow_xai_credential_fallback: false,
+            provider_profile: Some(xai_grok_sampling_types::ProviderProfile::Xai),
             user_selectable: true,
             id: None,
             model_family: None,

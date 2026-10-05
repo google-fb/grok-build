@@ -61,7 +61,8 @@ struct GrokRequestHeaders<'a> {
 }
 
 impl GrokRequestHeaders<'_> {
-    fn apply(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    fn apply(&self, builder: reqwest::RequestBuilder, enabled: bool) -> reqwest::RequestBuilder {
+        if !enabled { return builder; }
         let mut b = builder
             .header("x-grok-conv-id", self.conv_id)
             .header("x-grok-req-id", self.req_id)
@@ -394,6 +395,7 @@ impl std::fmt::Debug for SamplingClient {
 
 #[derive(Clone, Debug, Default)]
 struct ClientDefaults {
+    provider_profile: xai_grok_sampling_types::ProviderProfile,
     model: String,
     max_completion_tokens: Option<u32>,
     temperature: Option<f32>,
@@ -627,6 +629,7 @@ impl SamplingClient {
             &mut headers,
         );
 
+        if config.provider_profile.xai_extensions() {
         // Add x-grok-client-version header for version gating at the proxy.
         if let Some(client_version) = config.client_version.as_ref()
             && let Ok(header_value) = HeaderValue::from_str(client_version)
@@ -665,6 +668,7 @@ impl SamplingClient {
             }
         }
 
+        }
         // Always set User-Agent: per-session origin if available, else fallback.
         {
             let ua_string = match config.origin_client.as_ref() {
@@ -703,6 +707,7 @@ impl SamplingClient {
         );
 
         let defaults = ClientDefaults {
+            provider_profile: config.provider_profile,
             model: config.model,
             max_completion_tokens: config.max_completion_tokens,
             temperature: config.temperature,
@@ -729,6 +734,10 @@ impl SamplingClient {
     }
 
     /// The configured API backend for this client.
+    pub fn provider_profile(&self) -> xai_grok_sampling_types::ProviderProfile {
+        self.defaults.provider_profile
+    }
+
     pub fn api_backend(&self) -> ApiBackend {
         self.defaults.api_backend.clone()
     }
@@ -996,7 +1005,7 @@ impl SamplingClient {
             builder,
             sent_bearer,
         } = self.post(self.endpoint("chat/completions"));
-        let http_request = grok_headers.apply(builder).json(&payload);
+        let http_request = grok_headers.apply(builder, self.defaults.provider_profile.xai_extensions()).json(&payload);
 
         let response = http_request.send().await.map_err(|e| {
             // Log at debug level; errors are surfaced to the caller.
@@ -1058,7 +1067,7 @@ impl SamplingClient {
             sent_bearer,
         } = self.post(self.endpoint("chat/completions"));
         let http_request = grok_headers
-            .apply(builder)
+            .apply(builder, self.defaults.provider_profile.xai_extensions())
             .header(ACCEPT, HeaderValue::from_static("text/event-stream"))
             .json(&streaming_request);
 
@@ -1281,7 +1290,7 @@ impl SamplingClient {
             builder,
             sent_bearer,
         } = self.post(self.endpoint("responses"));
-        let http_request = grok_headers.apply(builder).json(&request_body);
+        let http_request = grok_headers.apply(builder, self.defaults.provider_profile.xai_extensions()).json(&request_body);
 
         let response = http_request.send().await.map_err(|e| {
             tracing::debug!("HTTP request failed: {}", e);
@@ -1425,7 +1434,7 @@ impl SamplingClient {
             sent_bearer,
         } = self.post(self.endpoint("responses"));
         let mut http_request = grok_headers
-            .apply(builder)
+            .apply(builder, self.defaults.provider_profile.xai_extensions())
             .header(ACCEPT, HeaderValue::from_static("text/event-stream"));
         if let Some(policy) = self.defaults.doom_loop_recovery {
             http_request = http_request
@@ -1635,7 +1644,7 @@ impl SamplingClient {
             builder,
             sent_bearer,
         } = self.post(self.endpoint("messages"));
-        let http_request = grok_headers.apply(builder).json(&request.inner);
+        let http_request = grok_headers.apply(builder, self.defaults.provider_profile.xai_extensions()).json(&request.inner);
 
         let response = http_request.send().await.map_err(|e| {
             tracing::debug!("HTTP request failed: {}", e);
@@ -1751,7 +1760,7 @@ impl SamplingClient {
             sent_bearer,
         } = self.post(self.endpoint("messages"));
         let http_request = grok_headers
-            .apply(builder)
+            .apply(builder, self.defaults.provider_profile.xai_extensions())
             .header(ACCEPT, HeaderValue::from_static("text/event-stream"))
             .json(&request.inner);
 
@@ -2291,6 +2300,7 @@ mod tests {
 
     fn minimal_config() -> SamplerConfig {
         SamplerConfig {
+            provider_profile: xai_grok_sampling_types::ProviderProfile::Xai,
             api_key: Some("test-key".to_string()),
             base_url: "https://example.test".to_string(),
             model: "test-model".to_string(),

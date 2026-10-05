@@ -52,6 +52,7 @@ fn sample_ledger() -> UsageLedger {
 
 fn sampling_config() -> xai_grok_sampling_types::SamplingConfig {
     xai_grok_sampling_types::SamplingConfig {
+        provider_profile: Some(xai_grok_sampling_types::ProviderProfile::Xai),
         base_url: String::new(),
         model: "parent-model".into(),
         max_completion_tokens: None,

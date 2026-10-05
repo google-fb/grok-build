@@ -47,6 +47,8 @@ pub enum AuthScheme {
 /// protocol shape.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SamplerConfig {
+    #[serde(default)]
+    pub provider_profile: xai_grok_sampling_types::ProviderProfile,
     pub api_key: Option<String>,
     pub base_url: String,
     pub model: String,
@@ -140,6 +142,7 @@ impl Default for SamplerConfig {
     /// new fields don't ripple through every literal site.
     fn default() -> Self {
         Self {
+            provider_profile: Default::default(),
             api_key: None,
             base_url: String::new(),
             model: String::new(),
