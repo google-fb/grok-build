@@ -550,10 +550,15 @@ pub struct Usage {
     /// normalize `0` to "unreported" (see `stream/chat_completions.rs`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_in_usd_ticks: Option<i64>,
+    /// Provider extension, interpreted only by the configured OpenRouter preset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct PromptTokensDetails {
+    #[serde(default)]
+    pub cache_write_tokens: u32,
     #[serde(default)]
     pub cached_tokens: u32,
     #[serde(default)]
@@ -1043,6 +1048,9 @@ impl ApiBackend {
 /// Sampling client configuration (API key excluded — that stays in the client).
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SamplingConfig {
+    /// Persist the selected extension preset; old sessions resolve conservatively by endpoint.
+    #[serde(default)]
+    pub provider_profile: Option<crate::ProviderProfile>,
     pub base_url: String,
     pub model: String,
     pub max_completion_tokens: Option<u32>,
@@ -1221,7 +1229,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn a3_openrouter_usage_baseline_preserves_tokens_but_drops_cost_and_cache_writes() {
+    fn a4_openrouter_usage_preserves_tokens_cost_and_cache_writes() {
         let usage: Usage = serde_json::from_value(json!({
             "prompt_tokens": 100,
             "completion_tokens": 20,
@@ -1233,12 +1241,10 @@ mod tests {
         }))
         .unwrap();
         let serialized = serde_json::to_value(&usage).unwrap();
-        // These assertions document the baseline gap. Update them when A4 adds support.
-        assert!(serialized.get("cost").is_none());
-        assert!(
-            serialized["prompt_tokens_details"]
-                .get("cache_write_tokens")
-                .is_none()
+        assert_eq!(serialized["cost"], json!(0.0123));
+        assert_eq!(
+            serialized["prompt_tokens_details"]["cache_write_tokens"],
+            json!(5)
         );
         assert_eq!(usage.cost_in_usd_ticks, None);
         let tokens: crate::TokenUsage = usage.into();
@@ -1246,7 +1252,7 @@ mod tests {
         assert_eq!(tokens.completion_tokens, 20);
         assert_eq!(tokens.cached_prompt_tokens, 30);
         assert_eq!(tokens.reasoning_tokens, 7);
-        assert_eq!(tokens.cache_creation_prompt_tokens, 0);
+        assert_eq!(tokens.cache_creation_prompt_tokens, 5);
     }
 
     #[test]

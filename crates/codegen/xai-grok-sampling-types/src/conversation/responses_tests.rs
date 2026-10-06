@@ -1275,6 +1275,7 @@ fn empty_reason_reasoning_only() {
     // A response with a Reasoning sibling but empty Assistant content
     // is classified as ReasoningOnly so the retry logic resamples.
     let response = ConversationResponse {
+        provider_cost: None,
         items: vec![
             ConversationItem::Reasoning(rs::ReasoningItem {
                 id: "r1".to_string(),

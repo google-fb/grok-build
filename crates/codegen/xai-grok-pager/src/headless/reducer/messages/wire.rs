@@ -11,13 +11,15 @@ pub(super) fn new_uuid() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-/// Serialize an `f64` cost, substituting `0.0` for a non-finite value.
-/// A non-finite value would make `serde_json` error and degrade the whole line to the `error` fallback.
+/// Missing or invalid money is null, never a fabricated zero.
 pub(super) fn serialize_finite_cost<S: serde::Serializer>(
-    value: &f64,
+    value: &Option<f64>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    serializer.serialize_f64(if value.is_finite() { *value } else { 0.0 })
+    match value.filter(|v| v.is_finite() && *v >= 0.0) {
+        Some(value) => serializer.serialize_f64(value),
+        None => serializer.serialize_none(),
+    }
 }
 
 /// Map a Grok permission mode to the Messages `permissionMode` enum; Grok-only values become `default`.
@@ -64,6 +66,8 @@ pub(super) enum ContentBlock {
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(super) struct MessageUsage {
     #[serde(default)]
+    pub(super) reasoning_tokens: u64,
+    #[serde(default)]
     pub(super) input_tokens: u64,
     #[serde(default)]
     pub(super) output_tokens: u64,
@@ -86,6 +90,7 @@ impl From<&ResponseUsage> for MessageUsage {
     /// Copy the shell's per-response usage into the four `message.usage` fields.
     fn from(u: &ResponseUsage) -> Self {
         Self {
+            reasoning_tokens: u.reasoning_tokens,
             input_tokens: u.input_tokens,
             output_tokens: u.output_tokens,
             cache_read_input_tokens: u.cache_read_input_tokens,
@@ -205,6 +210,12 @@ pub(super) enum SystemLine {
 
 #[derive(Serialize)]
 pub(super) struct ModelUsage {
+    #[serde(rename = "modelCalls")]
+    pub(super) model_calls: u64,
+    #[serde(rename = "apiDurationMs")]
+    pub(super) api_duration_ms: u64,
+    #[serde(rename = "reasoningTokens")]
+    pub(super) reasoning_tokens: u64,
     #[serde(rename = "inputTokens")]
     pub(super) input_tokens: u64,
     #[serde(rename = "outputTokens")]
@@ -216,7 +227,9 @@ pub(super) struct ModelUsage {
     #[serde(rename = "webSearchRequests")]
     pub(super) web_search_requests: u64,
     #[serde(rename = "costUSD", serialize_with = "serialize_finite_cost")]
-    pub(super) cost_usd: f64,
+    pub(super) cost_usd: Option<f64>,
+    #[serde(rename = "costSources")]
+    pub(super) cost_sources: Value,
     #[serde(rename = "contextWindow", skip_serializing_if = "Option::is_none")]
     pub(super) context_window: Option<u64>,
 }
@@ -233,7 +246,12 @@ pub(super) struct ResultLine {
     pub(super) result: Option<String>,
     pub(super) stop_reason: Option<String>,
     #[serde(serialize_with = "serialize_finite_cost")]
-    pub(super) total_cost_usd: f64,
+    pub(super) total_cost_usd: Option<f64>,
+    pub(super) total_cost_usd_ticks: Option<i64>,
+    pub(super) cost_sources: Value,
+    pub(super) cost_unit: Option<&'static str>,
+    pub(super) usage_is_incomplete: bool,
+    pub(super) cost_is_partial: bool,
     pub(super) usage: MessageUsage,
     /// Per-model usage keyed by model id; `{}` when there is no per-model breakdown.
     #[serde(rename = "modelUsage")]

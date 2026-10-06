@@ -39,6 +39,7 @@ async fn persist_ack_waits_for_disk_flush_before_success() {
                 cwd: cwd.as_str().to_string(),
             };
             let sampling_client = crate::sampling::Client::new(xai_grok_sampler::SamplerConfig {
+                provider_profile: xai_grok_sampling_types::ProviderProfile::Xai,
                 api_key: Some("test-key".to_string()),
                 base_url: "http://localhost".to_string(),
                 model: "test".to_string(),
@@ -90,6 +91,7 @@ async fn persist_ack_waits_for_disk_flush_before_success() {
             let chat_state_handle = xai_chat_state::ChatStateActor::spawn(
                 vec![],
                 xai_grok_sampling_types::SamplingConfig {
+                    provider_profile: Some(xai_grok_sampling_types::ProviderProfile::Xai),
                     base_url: "http://localhost".to_string(),
                     model: "test".to_string(),
                     max_completion_tokens: None,
@@ -453,6 +455,7 @@ async fn first_turn_memory_injection_persists_to_chat_history() {
                 cwd: session_dir.path().to_string_lossy().to_string(),
             };
             let sampling_client = crate::sampling::Client::new(xai_grok_sampler::SamplerConfig {
+                    provider_profile: xai_grok_sampling_types::ProviderProfile::Xai,
                     api_key: Some("test-key".to_string()),
                     base_url: "http://localhost".to_string(),
                     model: "test-model".to_string(),
@@ -507,6 +510,7 @@ async fn first_turn_memory_injection_persists_to_chat_history() {
                         ConversationItem::user("<user_info>OS Version: macos</user_info>"),
                     ],
                 xai_grok_sampling_types::SamplingConfig {
+                    provider_profile: Some(xai_grok_sampling_types::ProviderProfile::Xai),
                     base_url: "http://localhost".to_string(),
                     model: "test".to_string(),
                     max_completion_tokens: None,
@@ -588,6 +592,7 @@ async fn first_turn_memory_injection_disabled_does_not_persist_to_chat_history()
             let tool_context =
                 ToolContext::new(cwd.clone(), None, None, fs, terminal, hunk_tracker_handle);
             let sampling_client = crate::sampling::Client::new(xai_grok_sampler::SamplerConfig {
+                provider_profile: xai_grok_sampling_types::ProviderProfile::Xai,
                 api_key: Some("test-key".to_string()),
                 base_url: "http://localhost".to_string(),
                 model: "test-model".to_string(),
@@ -644,6 +649,7 @@ async fn first_turn_memory_injection_disabled_does_not_persist_to_chat_history()
             let chat_state_handle = xai_chat_state::ChatStateActor::spawn(
                 initial_conversation.clone(),
                 xai_grok_sampling_types::SamplingConfig {
+                    provider_profile: Some(xai_grok_sampling_types::ProviderProfile::Xai),
                     base_url: "http://localhost".to_string(),
                     model: "test".to_string(),
                     max_completion_tokens: None,
@@ -2503,6 +2509,7 @@ async fn cancel_propagates_to_sampler_handle_so_no_further_emission() {
                 let _ = axum::serve(listener, app).await;
             });
             let cfg = xai_grok_sampler::SamplerConfig {
+                provider_profile: xai_grok_sampling_types::ProviderProfile::Xai,
                 api_key: Some("test-key".to_string()),
                 base_url: format!("http://{addr}/v1"),
                 model: "test-model".to_string(),

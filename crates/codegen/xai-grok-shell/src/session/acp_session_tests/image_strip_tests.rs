@@ -99,6 +99,7 @@ fn completed_event(request_id: &RequestId) -> SamplingEvent {
     SamplingEvent::Completed {
         request_id: request_id.clone(),
         response: Box::new(ConversationResponse {
+            provider_cost: None,
             items: vec![ConversationItem::assistant("recovered")],
             stop_reason: None,
             usage: None,

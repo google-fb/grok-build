@@ -1150,6 +1150,7 @@ async fn set_session_model_invalidates_byok_memo_for_same_model_id() {
             // Switch to the same model_id, now a per-model BYOK model on a
             // third-party endpoint.
             let cfg = xai_grok_sampler::SamplerConfig {
+                provider_profile: xai_grok_sampling_types::ProviderProfile::Xai,
                 api_key: Some("byok-key".to_string()),
                 base_url: "https://third-party.example/v1".to_string(),
                 model: model.clone(),
@@ -1244,6 +1245,7 @@ async fn switch_to_first_party_model_drops_minted_provider_token() {
                 .unwrap_or_default();
 
             let cfg = xai_grok_sampler::SamplerConfig {
+                provider_profile: xai_grok_sampling_types::ProviderProfile::Xai,
                 api_key: Some("session-jwt".to_string()),
                 base_url: "https://api.x.ai/v1".to_string(),
                 model,

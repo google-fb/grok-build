@@ -297,6 +297,8 @@ impl HeadlessEmitter {
         }
         if let Some(usage) = &self.usage {
             attach_result_usage(&mut result, usage);
+        } else {
+            attach_result_usage(&mut result, &serde_json::json!({"usageIsIncomplete": true}));
         }
         self.attach_structured_output(&mut result);
         result
@@ -361,6 +363,8 @@ impl HeadlessEmitter {
                 let mut err = serde_json::json!({"type":"error","message": message});
                 if let Some(usage) = &self.usage {
                     attach_result_usage(&mut err, usage);
+                } else {
+                    attach_result_usage(&mut err, &serde_json::json!({"usageIsIncomplete": true}));
                 }
                 self.emit_line(&err);
             }

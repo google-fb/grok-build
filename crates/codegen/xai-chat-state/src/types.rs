@@ -174,6 +174,7 @@ mod tests {
         let snapshot = ChatStateSnapshot {
             conversation: vec![],
             sampling_config: SamplingConfig {
+                provider_profile: None,
                 base_url: "https://api.example.com".to_string(),
                 model: "test-model".to_string(),
                 max_completion_tokens: None,
@@ -219,6 +220,7 @@ mod tests {
                 ConversationItem::assistant("Hi there!"),
             ],
             sampling_config: SamplingConfig {
+                provider_profile: None,
                 base_url: "https://api.example.com".to_string(),
                 model: "grok-3".to_string(),
                 max_completion_tokens: Some(4096),

@@ -2035,6 +2035,14 @@ impl Config {
         } = super::config_model_override_parse::parse_model_overrides(raw_config);
         let (mut auth_providers, auth_provider_warnings) = parse_auth_providers(raw_config);
         let (model_providers, mut model_provider_warnings) = parse_model_providers(raw_config);
+        super::model_providers::validate_model_connections(
+            raw_config,
+            &config_models,
+            &model_providers,
+            &config_warnings,
+            &model_provider_warnings,
+        )?;
+
         for (id, provider) in &model_providers {
             if let Some(auth) = &provider.auth {
                 let synthetic = model_provider_auth_name(id);
@@ -3616,6 +3624,7 @@ pub(crate) fn resolve_model_list(
         if let Some(pid) = model_override.model_provider.as_deref()
             && entry.auth_provider.is_none()
             && session_bearer_unsafe
+            && !entry.info.allow_xai_credential_fallback
         {
             entry.auth_provider = Some(crate::auth::AuthProviderRef::fail_closed(format!(
                 "model_provider:{pid} (fail-closed)"
@@ -3763,7 +3772,11 @@ fn apply_global_scalar_defaults(
 pub(crate) fn default_model_entries(endpoints: &EndpointsConfig) -> IndexMap<String, ModelEntry> {
     default_models(endpoints)
         .into_iter()
-        .map(|(key, entry)| (key, ModelEntry::from_config_entry(&entry)))
+        .map(|(key, entry)| {
+            let mut model = ModelEntry::from_config_entry(&entry);
+            model.info.provider_profile = Some(xai_grok_sampling_types::ProviderProfile::Xai);
+            (key, model)
+        })
         .collect()
 }
 /// Resolve a model against the available model map.
@@ -4037,6 +4050,9 @@ fn is_default_laziness_detector(cfg: &LazinessDetectorPerModelConfig) -> bool {
 #[serde(default)]
 pub struct ConfigModelOverride {
     pub model: Option<String>,
+    pub provider_profile: Option<xai_grok_sampling_types::ProviderProfile>,
+    /// Explicit opt-in for an operator-owned gateway that accepts xAI credentials.
+    pub allow_xai_credential_fallback: Option<bool>,
     pub model_family: Option<String>,
     pub base_url: Option<String>,
     pub name: Option<String>,
@@ -4095,6 +4111,21 @@ impl ConfigModelOverride {
         endpoints: &EndpointsConfig,
     ) -> ModelEntry {
         let mut entry = base.unwrap_or_else(|| ModelEntry::fallback(key, endpoints));
+        if self.base_url.is_some() || self.api_base_url.is_some() {
+            // A new endpoint must not inherit another provider's protocol extensions.
+            entry.info.provider_profile =
+                Some(xai_grok_sampling_types::ProviderProfile::Compatible);
+            entry.info.allow_xai_credential_fallback = false;
+            entry.info.supports_backend_search = false;
+            entry.info.supports_reasoning_effort = false;
+            entry.info.stream_tool_calls = Some(false);
+        }
+        if let Some(profile) = self.provider_profile {
+            entry.info.provider_profile = Some(profile);
+        }
+        if let Some(allow) = self.allow_xai_credential_fallback {
+            entry.info.allow_xai_credential_fallback = allow;
+        }
         if let Some(ref v) = self.model {
             entry.info.model = v.clone();
         }
@@ -4209,6 +4240,10 @@ impl ConfigModelOverride {
 /// Shared model metadata — the common fields across all model sources.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ModelInfo {
+    #[serde(default)]
+    pub provider_profile: Option<xai_grok_sampling_types::ProviderProfile>,
+    #[serde(default)]
+    pub allow_xai_credential_fallback: bool,
     /// Stable unique identifier for this catalog entry.
     /// Falls back to `model` when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4290,6 +4325,8 @@ impl ModelInfo {
     /// Used when a configured model ID isn't found in presets or remote models.
     pub fn fallback(slug: &str) -> Self {
         ModelInfo {
+            provider_profile: None,
+            allow_xai_credential_fallback: false,
             user_selectable: true,
             id: None,
             model: slug.to_owned(),
@@ -4329,6 +4366,8 @@ impl ModelInfo {
     /// Extract shared model metadata from a flat config entry.
     pub(crate) fn from_config(entry: &ModelEntryConfig) -> Self {
         ModelInfo {
+            provider_profile: None,
+            allow_xai_credential_fallback: false,
             user_selectable: true,
             id: entry.id.clone(),
             model: entry.model.clone(),
@@ -4885,6 +4924,8 @@ pub(crate) fn resolve_credentials(
             xai_chat_state::AuthType::ApiKey,
         )
     } else if let Some(key) = session_key
+        && (info.allow_xai_credential_fallback
+            || crate::util::is_xai_api_bearer_url(&info.base_url))
         && crate::auth::backend::AuthBackend::may_receive_session(
             &crate::auth::backend::ActiveAuthBackend::default(),
             &info.base_url,
@@ -4900,7 +4941,13 @@ pub(crate) fn resolve_credentials(
             .api_base_url
             .clone()
             .unwrap_or_else(|| info.base_url.clone());
-        (Some(key), url, xai_chat_state::AuthType::ApiKey)
+        let allowed =
+            info.allow_xai_credential_fallback || crate::util::is_xai_api_bearer_url(&url);
+        (
+            allowed.then_some(key),
+            url,
+            xai_chat_state::AuthType::ApiKey,
+        )
     } else {
         if let Some(ref env_keys) = model.env_key
             && !env_keys.is_empty()
@@ -5105,6 +5152,8 @@ pub(crate) fn resolve_aux_model_sampling_config(
     if let Some(bearer) = xai_bearer {
         let entry = ModelEntry {
             info: ModelInfo {
+                provider_profile: Some(xai_grok_sampling_types::ProviderProfile::Xai),
+                allow_xai_credential_fallback: false,
                 user_selectable: true,
                 id: None,
                 model_family: None,
@@ -5259,11 +5308,14 @@ pub(crate) fn sampling_config_for_model(
     let temperature = info.temperature;
     let top_p = info.top_p;
     let mut extra_headers = info.extra_headers.clone();
-    inject_url_derived_headers(
-        &mut extra_headers,
-        alpha_test_key.as_deref(),
-        &credentials.base_url,
-    );
+    let provider_profile = effective_provider_profile(info.provider_profile, &credentials.base_url);
+    if provider_profile.xai_extensions() {
+        inject_url_derived_headers(
+            &mut extra_headers,
+            alpha_test_key.as_deref(),
+            &credentials.base_url,
+        );
+    }
     let api_backend = info.api_backend.clone();
     let extra_response_includes = response_include_extensions(
         info.supports_backend_search,
@@ -5271,6 +5323,7 @@ pub(crate) fn sampling_config_for_model(
         &credentials.base_url,
     );
     SamplerConfig {
+        provider_profile,
         api_key: credentials.api_key,
         model: model_name,
         base_url: credentials.base_url,
@@ -5317,6 +5370,19 @@ pub(crate) fn sampling_config_for_model(
 ///   get an extra access header from the corresponding key argument.
 ///
 /// Existing entries are never overwritten so callers can pre-set a value.
+pub(crate) fn effective_provider_profile(
+    configured: Option<xai_grok_sampling_types::ProviderProfile>,
+    endpoint: &str,
+) -> xai_grok_sampling_types::ProviderProfile {
+    configured.unwrap_or_else(|| {
+        if crate::util::is_xai_api_bearer_url(endpoint) {
+            xai_grok_sampling_types::ProviderProfile::Xai
+        } else {
+            xai_grok_sampling_types::ProviderProfile::Compatible
+        }
+    })
+}
+
 pub(crate) fn inject_url_derived_headers(
     headers: &mut IndexMap<String, String>,
     alpha_test_key: Option<&str>,
@@ -5345,6 +5411,8 @@ fn resolve_hidden_default_web_search_sampling_config(
 ) -> SamplerConfig {
     let entry = ModelEntry {
         info: ModelInfo {
+            provider_profile: Some(xai_grok_sampling_types::ProviderProfile::Xai),
+            allow_xai_credential_fallback: false,
             id: None,
             model_family: None,
             model: model_id.to_owned(),

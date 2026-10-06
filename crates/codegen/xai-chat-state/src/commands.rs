@@ -99,6 +99,7 @@ pub enum ChatStateCommand {
     RecordLastTurnUsage { usage: TokenUsage },
 
     RecordModelCallUsage {
+        provider_cost: Option<xai_grok_sampling_types::ProviderCost>,
         model_id: Option<String>,
         usage: TokenUsage,
         api_duration_ms: Option<u64>,
@@ -423,6 +424,7 @@ mod tests {
         let _ = ChatStateCommand::IncrementPromptIndex;
         let _ = ChatStateCommand::UpdateSamplingConfig {
             config: SamplingConfig {
+                provider_profile: None,
                 base_url: String::new(),
                 model: String::new(),
                 max_completion_tokens: None,

@@ -71,7 +71,7 @@ pub struct SessionNotification {
 /// | Surface | `input_tokens` / `inputTokens` | Cost |
 /// |---------|--------------------------------|------|
 /// | **ACP** (`PromptUsage`) | **Full** prompt sum (includes cache reads) | `costUsdTicks` (1e10 ticks = $1), scrubbed when partial/incomplete |
-/// | **Headless** ([`project_result_usage`]) | **Uncached only** (`full − cache_read`) | Float `total_cost_usd` + exact `total_cost_usd_ticks`, only when complete |
+/// | **Headless** ([`project_result_usage`]) | **Fresh only** (`full − cache_read − cache_creation`) | Nullable USD + source; exact ticks only for xAI, only when complete |
 /// | ACP `_meta` sibling fields | **Last model call only** (not whole-prompt) | — |
 ///
 /// Trust cost only when present **and** not `usageIsIncomplete` **and** not
@@ -79,8 +79,8 @@ pub struct SessionNotification {
 ///
 /// Mixed headless shape is frozen for external-tool compatibility: snake_case
 /// on totals (`usage.input_tokens`, `total_cost_usd`) and camelCase under
-/// `modelUsage` (`inputTokens`, `costUSD`). Per-model rows are a reduced
-/// schema (no reasoning/duration on the wire).
+/// `modelUsage` (`inputTokens`, `costUSD`). Per-model rows include reasoning
+/// and duration; nullable money carries explicit source metadata.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PromptUsage {
     #[serde(flatten)]
@@ -149,8 +149,10 @@ impl PromptUsage {
             return;
         }
         self.totals.cost_usd_ticks = None;
+        self.totals.cost_by_source.clear();
         for m in self.model_usage.values_mut() {
             m.cost_usd_ticks = None;
+            m.cost_by_source.clear();
             if self.totals.cost_is_partial {
                 m.cost_is_partial = true;
             }
@@ -170,6 +172,7 @@ impl PromptUsage {
             model_calls,
             api_duration_ms: _, // timing, not tokens
             cost_usd_ticks: _,  // cost without usage cannot occur
+            cost_by_source: _,
             cost_is_partial: _,
             cost_missing_calls: _,
         } = self.totals;
@@ -211,6 +214,8 @@ pub struct PromptUsageModel {
     /// and per-model rows as float `costUSD`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd_ticks: Option<i64>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub cost_by_source: std::collections::BTreeMap<xai_grok_sampling_types::CostSource, f64>,
     /// Some folded calls lacked cost, so any cost shown is a partial sum.
     /// After a scrub of a partial bill, complete per-model rows are also
     /// stamped `true`: the flag means "do not trust this row's cost", not
@@ -253,6 +258,7 @@ impl From<&xai_chat_state::UsageTotals> for PromptUsageModel {
             model_calls,
             api_duration_ms,
             cost_usd_ticks,
+            cost_by_source: _,
             cost_missing_calls,
         } = *t;
         Self {
@@ -265,6 +271,7 @@ impl From<&xai_chat_state::UsageTotals> for PromptUsageModel {
             model_calls,
             api_duration_ms,
             cost_usd_ticks,
+            cost_by_source: t.reported_costs(),
             cost_is_partial: t.cost_is_partial(),
             cost_missing_calls,
         }
@@ -306,85 +313,99 @@ pub(crate) fn uncached_input_tokens(full_input: u64, cached_read: u64) -> u64 {
 /// - `usage.input_tokens` = uncached (`full − cache_read − cache_creation`), so
 ///   the three prompt buckets are disjoint; identity
 ///   `input_tokens + cache_read + cache_creation + output = total_tokens`.
-/// - Omits all cost floats when partial or incomplete (absence ≠ free).
-/// - Incomplete with no tokens emits only `usage_is_incomplete` (no zero usage object).
-/// - `modelUsage` rows are a reduced external-compat schema (camelCase; no reasoning/duration).
+/// - Cost is null when partial, incomplete or unknown (unknown ≠ free).
+/// - Incomplete with no tokens emits metadata without a zero usage object.
+/// - `modelUsage` rows retain the external camelCase schema.
+fn result_costs(
+    row: &PromptUsageModel,
+) -> std::collections::BTreeMap<xai_grok_sampling_types::CostSource, f64> {
+    if row.cost_by_source.is_empty() {
+        xai_grok_sampling_types::ProviderCost::from_xai_ticks(row.cost_usd_ticks)
+            .map(|c| std::collections::BTreeMap::from([(c.source, c.usd)]))
+            .unwrap_or_default()
+    } else {
+        row.cost_by_source.clone()
+    }
+}
+
+/// Valid provider-reported USD. Callers must also check the enclosing usage completeness.
+pub fn reported_cost_usd(row: &PromptUsageModel) -> Option<f64> {
+    if row.cost_is_partial {
+        return None;
+    }
+    let costs = result_costs(row);
+    if costs.is_empty() || costs.values().any(|v| !v.is_finite() || *v < 0.0) {
+        return None;
+    }
+    match (
+        costs.get(&xai_grok_sampling_types::CostSource::XaiUsageTicks),
+        row.cost_usd_ticks,
+    ) {
+        (Some(amount), Some(ticks))
+            if ticks > 0 && (*amount - ticks_to_usd(ticks)).abs() <= 1e-10 => {}
+        (None, None) => {}
+        _ => return None,
+    }
+    let total: f64 = costs.values().sum();
+    total.is_finite().then_some(total)
+}
+
 pub(crate) fn project_result_usage(result: &mut serde_json::Value, usage: &PromptUsage) {
+    result["total_cost_usd"] = serde_json::Value::Null;
+    result["total_cost_usd_ticks"] = serde_json::Value::Null;
+    result["cost_sources"] = serde_json::json!([]);
+    result["cost_unit"] = serde_json::Value::Null;
+    result["usage_is_incomplete"] = usage.usage_is_incomplete.into();
+    result["cost_is_partial"] = usage.totals.cost_is_partial.into();
     if usage.usage_is_incomplete && usage.is_token_empty() {
-        result["usage_is_incomplete"] = true.into();
         return;
     }
 
-    // Exhaustive destructure: a new wire field is a compile error until it is
-    // either projected or named as deliberately dropped from the headless shape.
-    let PromptUsageModel {
-        input_tokens,
-        output_tokens,
-        total_tokens,
-        cached_read_tokens,
-        cache_creation_tokens,
-        reasoning_tokens,
-        model_calls: _,     // totals-level; headless carries num_turns instead
-        api_duration_ms: _, // dropped: not part of the frozen headless shape
-        cost_usd_ticks,
-        cost_is_partial,
-        cost_missing_calls: _, // internal partiality count; the flag suffices
-    } = usage.totals;
+    let t = &usage.totals;
     result["usage"] = serde_json::json!({
-        "input_tokens": uncached_input_tokens(input_tokens, cached_read_tokens)
-            .saturating_sub(cache_creation_tokens),
-        "cache_read_input_tokens": cached_read_tokens,
-        "cache_creation_input_tokens": cache_creation_tokens,
-        "output_tokens": output_tokens,
-        "reasoning_tokens": reasoning_tokens,
-        "total_tokens": total_tokens,
+        "input_tokens": uncached_input_tokens(t.input_tokens, t.cached_read_tokens)
+            .saturating_sub(t.cache_creation_tokens),
+        "cache_read_input_tokens": t.cached_read_tokens,
+        "cache_creation_input_tokens": t.cache_creation_tokens,
+        "output_tokens": t.output_tokens,
+        "reasoning_tokens": t.reasoning_tokens,
+        "total_tokens": t.total_tokens,
     });
     result["num_turns"] = usage.num_turns.into();
-    if usage.usage_is_incomplete {
-        result["usage_is_incomplete"] = true.into();
-    }
-    let hide_costs = cost_is_partial || usage.usage_is_incomplete;
-    if hide_costs {
-        if cost_is_partial {
-            result["cost_is_partial"] = true.into();
+    let hide_costs = t.cost_is_partial || usage.usage_is_incomplete;
+    if !hide_costs && let Some(amount) = reported_cost_usd(t) {
+        let sources = result_costs(t);
+        result["total_cost_usd"] = serde_json::json!(amount);
+        result["cost_sources"] = serde_json::json!(sources.keys().collect::<Vec<_>>());
+        result["cost_unit"] = serde_json::json!("USD");
+        // Exact integer ticks represent xAI only. Never manufacture ticks from
+        // a different provider's floating-point USD amount or expose a mixed subtotal.
+        if sources.len() == 1
+            && sources.contains_key(&xai_grok_sampling_types::CostSource::XaiUsageTicks)
+        {
+            result["total_cost_usd_ticks"] = serde_json::json!(t.cost_usd_ticks);
         }
-    } else if let Some(ticks) = cost_usd_ticks {
-        result["total_cost_usd"] = serde_json::json!(ticks_to_usd(ticks));
-        // Exact integer ticks beside the float, under the same trust gate:
-        // reconciliation sums ticks exactly, which floats cannot guarantee.
-        result["total_cost_usd_ticks"] = serde_json::json!(ticks);
     }
     if !usage.model_usage.is_empty() {
         let mut model_usage = serde_json::Map::new();
         for (name, m) in &usage.model_usage {
-            let PromptUsageModel {
-                input_tokens,
-                output_tokens,
-                total_tokens: _, // derivable per row
-                cached_read_tokens,
-                cache_creation_tokens,
-                reasoning_tokens: _, // dropped: reduced per-model schema
-                model_calls,
-                api_duration_ms: _, // dropped: reduced per-model schema
-                cost_usd_ticks,
-                cost_is_partial,
-                cost_missing_calls: _,
-            } = *m;
-            let mut entry = serde_json::json!({
-                "inputTokens": uncached_input_tokens(input_tokens, cached_read_tokens)
-                    .saturating_sub(cache_creation_tokens),
-                "outputTokens": output_tokens,
-                "cacheReadInputTokens": cached_read_tokens,
-                "cacheCreationInputTokens": cache_creation_tokens,
-                "modelCalls": model_calls,
-            });
-            if !hide_costs
-                && let Some(ticks) = cost_usd_ticks
-                && !cost_is_partial
-            {
-                entry["costUSD"] = serde_json::json!(ticks_to_usd(ticks));
-            }
-            model_usage.insert(name.clone(), entry);
+            let amount = if hide_costs || m.cost_is_partial {
+                None
+            } else {
+                reported_cost_usd(m)
+            };
+            model_usage.insert(name.clone(), serde_json::json!({
+                "inputTokens": uncached_input_tokens(m.input_tokens, m.cached_read_tokens)
+                    .saturating_sub(m.cache_creation_tokens),
+                "outputTokens": m.output_tokens,
+                "cacheReadInputTokens": m.cached_read_tokens,
+                "cacheCreationInputTokens": m.cache_creation_tokens,
+                "reasoningTokens": m.reasoning_tokens,
+                "apiDurationMs": m.api_duration_ms,
+                "modelCalls": m.model_calls,
+                "costUSD": amount,
+                "costSources": if amount.is_some() { result_costs(m).keys().copied().collect::<Vec<_>>() } else { vec![] },
+            }));
         }
         result["modelUsage"] = model_usage.into();
     }
@@ -400,7 +421,13 @@ pub fn attach_result_usage_fail_closed(result: &mut serde_json::Value, usage: &s
                 error = %e,
                 "headless: _meta.usage failed to parse; marking usage_is_incomplete"
             );
-            result["usage_is_incomplete"] = true.into();
+            project_result_usage(
+                result,
+                &PromptUsage {
+                    usage_is_incomplete: true,
+                    ..Default::default()
+                },
+            );
         }
     }
 }
@@ -2478,10 +2505,16 @@ mod tests {
         let mut result = serde_json::json!({});
         project_result_usage(&mut result, &partial);
         assert_eq!(result["usage"]["input_tokens"], 60);
-        assert!(result.get("total_cost_usd").is_none());
-        assert!(result.get("total_cost_usd_ticks").is_none());
+        assert_eq!(result.get("total_cost_usd"), Some(&serde_json::Value::Null));
+        assert_eq!(
+            result.get("total_cost_usd_ticks"),
+            Some(&serde_json::Value::Null)
+        );
         assert_eq!(result["cost_is_partial"], true);
-        assert!(result["modelUsage"]["m"].get("costUSD").is_none());
+        assert_eq!(
+            result["modelUsage"]["m"]["costUSD"],
+            serde_json::Value::Null
+        );
 
         let mut incomplete = PromptUsage {
             totals: PromptUsageModel {
@@ -2501,9 +2534,15 @@ mod tests {
         let mut result = serde_json::json!({});
         project_result_usage(&mut result, &incomplete);
         assert_eq!(result["usage_is_incomplete"], true);
-        assert!(result.get("total_cost_usd").is_none());
-        assert!(result.get("total_cost_usd_ticks").is_none());
-        assert!(result["modelUsage"]["m"].get("costUSD").is_none());
+        assert_eq!(result.get("total_cost_usd"), Some(&serde_json::Value::Null));
+        assert_eq!(
+            result.get("total_cost_usd_ticks"),
+            Some(&serde_json::Value::Null)
+        );
+        assert_eq!(
+            result["modelUsage"]["m"]["costUSD"],
+            serde_json::Value::Null
+        );
     }
 
     #[test]
@@ -2514,7 +2553,7 @@ mod tests {
         assert_eq!(result["usage_is_incomplete"], true);
         assert!(result.get("usage").is_none());
         assert!(result.get("num_turns").is_none());
-        assert!(result.get("total_cost_usd").is_none());
+        assert_eq!(result.get("total_cost_usd"), Some(&serde_json::Value::Null));
     }
 
     #[test]
@@ -2524,6 +2563,67 @@ mod tests {
         assert_eq!(result["usage_is_incomplete"], true);
         assert!(result.get("usage").is_none());
         assert_eq!(result["ok"], true);
+        assert_eq!(result.get("total_cost_usd"), Some(&serde_json::Value::Null));
+        assert_eq!(result["cost_sources"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn a4_headless_provider_cost_sources_null_zero_and_mixed() {
+        use xai_grok_sampling_types::{CostSource, ProviderCost, TokenUsage};
+        let mut ledger = xai_chat_state::UsageLedger::default();
+        let tokens = TokenUsage {
+            prompt_tokens: 100,
+            completion_tokens: 50,
+            total_tokens: 150,
+            cached_prompt_tokens: 20,
+            cache_creation_prompt_tokens: 5,
+            reasoning_tokens: 7,
+        };
+        for amount in [Some(0.0), Some(0.2), None] {
+            ledger.record_provider_call(
+                "router",
+                &tokens,
+                Some(9),
+                None,
+                amount.map(|usd| ProviderCost {
+                    usd,
+                    source: CostSource::OpenrouterUsageCost,
+                }),
+            );
+            let mut result = serde_json::json!({});
+            project_result_usage(&mut result, &PromptUsage::from(&ledger));
+            assert_eq!(result["total_cost_usd_ticks"], serde_json::Value::Null);
+            if amount.is_some() {
+                assert_eq!(result["total_cost_usd"], serde_json::json!(amount));
+                assert_eq!(
+                    result["cost_sources"],
+                    serde_json::json!(["openrouter_usage_cost"])
+                );
+                assert_eq!(result["cost_unit"], "USD");
+            } else {
+                assert_eq!(result["total_cost_usd"], serde_json::Value::Null);
+                assert_eq!(result["cost_is_partial"], true);
+            }
+        }
+        let mut mixed = xai_chat_state::UsageLedger::default();
+        mixed.record_main_loop_call("xai", &tokens, Some(9), Some(1_000_000_000));
+        mixed.record_provider_call(
+            "router",
+            &tokens,
+            Some(9),
+            None,
+            Some(ProviderCost {
+                usd: 0.2,
+                source: CostSource::OpenrouterUsageCost,
+            }),
+        );
+        let mut result = serde_json::json!({});
+        project_result_usage(&mut result, &PromptUsage::from(&mixed));
+        assert!((result["total_cost_usd"].as_f64().unwrap() - 0.3).abs() < 1e-12);
+        assert_eq!(result["total_cost_usd_ticks"], serde_json::Value::Null);
+        assert_eq!(result["usage"]["input_tokens"], 150);
+        assert_eq!(result["modelUsage"]["router"]["reasoningTokens"], 7);
+        assert_eq!(result["modelUsage"]["router"]["apiDurationMs"], 9);
     }
 
     #[test]

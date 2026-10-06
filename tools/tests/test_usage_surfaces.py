@@ -62,8 +62,8 @@ class UsageSurfacesTest(unittest.TestCase):
         self.assertEqual(terminal["modelUsage"]["model-a"]["inputTokens"], 65)
         self.assertEqual(wire["modelUsage"]["model-a"]["reasoningTokens"], 7)
         self.assertEqual(durable["by_model"]["model-b"]["reasoning_tokens"], 3)
-        # A1 documents these baseline omissions; A2 must explicitly update this contract.
-        self.assertNotIn("reasoningTokens", terminal["modelUsage"]["model-a"])
+        # A4 preserves provider token detail through both headless surfaces.
+        self.assertEqual(terminal["modelUsage"]["model-a"]["reasoningTokens"], 7)
         self.assertNotIn("calls", durable)
         self.assertEqual(durable["main_loop_model_calls"], 2)
 
@@ -92,16 +92,16 @@ class UsageSurfacesTest(unittest.TestCase):
         self.assertEqual(durable["totals"]["cost_usd_ticks"], 1_000_000_000)
         self.assertEqual(terminal["usage"]["reasoning_tokens"], 10)
         self.assertTrue(terminal["cost_is_partial"])
-        self.assertNotIn("total_cost_usd", terminal)
+        self.assertIsNone(terminal["total_cost_usd"])
         self.assertNotIn("costUsdTicks", self.completion(updates)["usage"])
-        self.assertNotIn("costUSD", terminal["modelUsage"]["model-a"])
+        self.assertIsNone(terminal["modelUsage"]["model-a"]["costUSD"])
 
     def test_incomplete_ledger_scrubs_wire_money(self):
         durable, updates, terminal = self.probe("incomplete")
         self.assertTrue(durable["incomplete"])
         self.assertEqual(durable["totals"]["cost_usd_ticks"], 3_000_000_000)
         self.assertTrue(terminal["usage_is_incomplete"])
-        self.assertNotIn("total_cost_usd_ticks", terminal)
+        self.assertIsNone(terminal["total_cost_usd_ticks"])
         self.assertNotIn("costUsdTicks", self.completion(updates)["usage"])
 
     def test_refuses_existing_directory_and_unknown_mode(self):

@@ -780,6 +780,7 @@ pub(crate) fn stream_responses_tracked<'a>(
         }
 
         let conversation_response = ConversationResponse {
+            provider_cost: xai_grok_sampling_types::ProviderCost::from_xai_ticks(cost_usd_ticks),
             items,
             stop_reason,
             usage,

@@ -134,6 +134,7 @@ pub(super) fn assistant_with_calls(calls: &[(&str, &str)]) -> ConversationItem {
 
 pub(super) fn make_response(message: ConversationItem) -> ConversationResponse {
     ConversationResponse {
+        provider_cost: None,
         items: vec![message],
         stop_reason: Some(StopReason::Stop),
         usage: None,

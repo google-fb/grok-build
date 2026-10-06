@@ -3804,6 +3804,8 @@ async fn process_key_from_model_env_key() {
             r#"
             [model."{dm}"]
             model = "{dm}"
+            base_url = "https://api.x.ai/v1"
+            provider_profile = "xai"
             env_key = "{ENV}"
             "#
         ))

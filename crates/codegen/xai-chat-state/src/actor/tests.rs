@@ -18,6 +18,7 @@ fn test_config() -> SamplingConfig {
 
 fn test_config_with_window(context_window: u64) -> SamplingConfig {
     SamplingConfig {
+        provider_profile: None,
         base_url: "https://api.example.com".to_string(),
         model: "test-model".to_string(),
         max_completion_tokens: None,
@@ -630,11 +631,7 @@ async fn usage_persist_restores_ledger_from_serialized_snapshot() {
             .await
     );
 
-    let original = h
-        .handle
-        .try_get_session_usage()
-        .await
-        .expect("actor alive");
+    let original = h.handle.try_get_session_usage().await.expect("actor alive");
     let records = h.drain_persistence();
     let persisted = records
         .into_iter()
@@ -651,13 +648,8 @@ async fn usage_persist_restores_ledger_from_serialized_snapshot() {
         serde_json::from_slice(&usage_json).expect("read usage.json");
 
     let (mock, rx) = MockChatPersistence::new();
-    let restored = TestHarness::with_persistence_and_usage(
-        vec![],
-        test_config(),
-        mock,
-        rx,
-        restored_file,
-    );
+    let restored =
+        TestHarness::with_persistence_and_usage(vec![], test_config(), mock, rx, restored_file);
     let loaded = restored
         .handle
         .try_get_session_usage()
@@ -680,11 +672,7 @@ async fn usage_crash_style_persist_keeps_first_call_only() {
     let mut h = TestHarness::new();
     h.handle
         .record_model_call_usage(Some("a".into()), usage_call(11, 2, 1), Some(5), None);
-    let after_first = h
-        .handle
-        .try_get_session_usage()
-        .await
-        .expect("actor alive");
+    let after_first = h.handle.try_get_session_usage().await.expect("actor alive");
     let first_snapshot = h
         .drain_persistence()
         .into_iter()
@@ -699,11 +687,7 @@ async fn usage_crash_style_persist_keeps_first_call_only() {
 
     h.handle
         .record_model_call_usage(Some("a".into()), usage_call(9, 1, 0), Some(3), None);
-    let after_second = h
-        .handle
-        .try_get_session_usage()
-        .await
-        .expect("actor alive");
+    let after_second = h.handle.try_get_session_usage().await.expect("actor alive");
     assert_eq!(after_second.totals.input_tokens, 20);
     assert_eq!(after_second.main_loop_model_calls, 2);
 
@@ -721,7 +705,10 @@ async fn usage_crash_style_persist_keeps_first_call_only() {
         .await
         .expect("restored actor alive");
     assert_eq!(loaded.totals.input_tokens, after_first.totals.input_tokens);
-    assert_eq!(loaded.totals.output_tokens, after_first.totals.output_tokens);
+    assert_eq!(
+        loaded.totals.output_tokens,
+        after_first.totals.output_tokens
+    );
     assert_eq!(
         loaded.totals.cached_read_tokens,
         after_first.totals.cached_read_tokens
@@ -1541,6 +1528,7 @@ async fn cache_prompt_text_appends_in_order() {
 async fn update_sampling_config_is_queryable() {
     let h = TestHarness::new();
     let new_config = SamplingConfig {
+        provider_profile: None,
         base_url: "https://new.example.com".to_string(),
         model: "grok-3".to_string(),
         max_completion_tokens: Some(4096),
@@ -1956,6 +1944,7 @@ async fn build_request_with_tool_definitions() {
 #[tokio::test]
 async fn build_request_uses_sampling_config() {
     let config = SamplingConfig {
+        provider_profile: None,
         base_url: "https://api.example.com".to_string(),
         model: "grok-3".to_string(),
         max_completion_tokens: Some(8192),
@@ -4099,6 +4088,7 @@ async fn sampling_config_survives_compaction_replacement() {
     use xai_grok_sampling_types::ApiBackend;
 
     let config = SamplingConfig {
+        provider_profile: None,
         base_url: "https://api.example.com".to_string(),
         model: "grok-build".to_string(),
         max_completion_tokens: None,
@@ -4184,6 +4174,7 @@ async fn sampling_config_survives_compaction_replacement() {
 #[tokio::test]
 async fn model_metadata_lost_after_compaction_then_recovered_on_next_turn() {
     let config = SamplingConfig {
+        provider_profile: None,
         base_url: "https://api.example.com".to_string(),
         model: "grok-build".to_string(),
         max_completion_tokens: None,
@@ -4274,6 +4265,7 @@ async fn context_window_downgrade_triggers_auto_compact() {
 
     // Initial config: 500k context, Responses backend (matches grok-4.5)
     let config = SamplingConfig {
+        provider_profile: None,
         base_url: "https://api.x.ai/v1".to_string(),
         model: "grok-4.5".to_string(),
         max_completion_tokens: None,

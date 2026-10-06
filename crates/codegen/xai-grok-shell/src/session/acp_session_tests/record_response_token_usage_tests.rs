@@ -6,6 +6,7 @@ use xai_grok_sampling_types::{
 
 fn response_with_usage(total_tokens: u32) -> ConversationResponse {
     ConversationResponse {
+        provider_cost: None,
         items: vec![ConversationItem::assistant("ok")],
         stop_reason: None,
         usage: Some(TokenUsage {
@@ -29,6 +30,7 @@ fn response_with_usage(total_tokens: u32) -> ConversationResponse {
 
 fn response_without_usage() -> ConversationResponse {
     ConversationResponse {
+        provider_cost: None,
         items: vec![ConversationItem::assistant("ok")],
         stop_reason: None,
         usage: None,
@@ -56,6 +58,7 @@ async fn response_reasoning_does_not_inflate_model_reported_context() {
             let (actor, mut event_rx) =
                 create_test_actor_ex(0, 500_000, 95, gateway_tx, persistence_tx).await;
             let response = ConversationResponse {
+                provider_cost: None,
                 items: vec![
                     ConversationItem::Reasoning(rs::ReasoningItem {
                         id: "reasoning-1".to_string(),
@@ -150,6 +153,7 @@ async fn response_without_usage_keeps_model_output_as_estimated_growth() {
             let (persistence_tx, _) = tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
             let actor = create_test_actor(100_000, 500_000, 95, gateway_tx, persistence_tx).await;
             let response = ConversationResponse {
+                provider_cost: None,
                 items: vec![
                     ConversationItem::Reasoning(rs::ReasoningItem {
                         id: "reasoning-1".to_string(),

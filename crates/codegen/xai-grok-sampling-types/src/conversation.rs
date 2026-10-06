@@ -883,7 +883,10 @@ impl From<Usage> for TokenUsage {
                 .as_ref()
                 .map_or(0, |d| d.reasoning_tokens),
             cached_prompt_tokens,
-            cache_creation_prompt_tokens: 0,
+            cache_creation_prompt_tokens: u
+                .prompt_tokens_details
+                .as_ref()
+                .map_or(0, |d| d.cache_write_tokens),
         }
     }
 }
@@ -898,6 +901,8 @@ impl From<Usage> for TokenUsage {
 /// "the response message" for backwards-compatible call sites.
 #[derive(Debug, Clone)]
 pub struct ConversationResponse {
+    /// Reported monetary amount with provenance; absent means unknown.
+    pub provider_cost: Option<crate::ProviderCost>,
     /// The flat ordered list of items produced by this turn. The trailing
     /// item is always an `Assistant` item (possibly with empty content if
     /// the model only emitted reasoning or tool calls).
@@ -3744,6 +3749,7 @@ mod tests {
     fn test_conversation_response_is_empty() {
         // Empty assistant message
         let response = ConversationResponse {
+            provider_cost: None,
             items: vec![ConversationItem::assistant("")],
             stop_reason: None,
             usage: None,
@@ -3759,6 +3765,7 @@ mod tests {
 
         // Assistant with content
         let response = ConversationResponse {
+            provider_cost: None,
             items: vec![ConversationItem::assistant("Hello")],
             stop_reason: None,
             usage: None,
@@ -3774,6 +3781,7 @@ mod tests {
 
         // Assistant with only tool calls
         let response = ConversationResponse {
+            provider_cost: None,
             items: vec![ConversationItem::assistant_tool_calls(vec![ToolCall {
                 id: "1".into(),
                 name: "test".to_string(),
@@ -3797,6 +3805,7 @@ mod tests {
         // The model returned reasoning tokens but no visible content.
         // is_empty() should return true so the retry logic resamples.
         let response = ConversationResponse {
+            provider_cost: None,
             items: vec![ConversationItem::Assistant(AssistantItem {
                 content: String::new().into(),
                 tool_calls: vec![],
@@ -3821,6 +3830,7 @@ mod tests {
 
         // Reasoning with content should NOT be empty
         let response = ConversationResponse {
+            provider_cost: None,
             items: vec![ConversationItem::Assistant(AssistantItem {
                 content: "Here is my answer.".into(),
                 tool_calls: vec![],
@@ -3845,6 +3855,7 @@ mod tests {
 
         // Reasoning with tool calls should NOT be empty
         let response = ConversationResponse {
+            provider_cost: None,
             items: vec![ConversationItem::Assistant(AssistantItem {
                 content: String::new().into(),
                 tool_calls: vec![ToolCall {
@@ -3875,6 +3886,7 @@ mod tests {
     #[test]
     fn test_conversation_response_tool_calls() {
         let response = ConversationResponse {
+            provider_cost: None,
             items: vec![ConversationItem::assistant_tool_calls(vec![
                 ToolCall {
                     id: "1".into(),
@@ -3909,6 +3921,7 @@ mod tests {
         // Scenario: empty-response retry — text present but no
         // AgentMessageChunk events were streamed.
         let response = ConversationResponse {
+            provider_cost: None,
             items: vec![ConversationItem::assistant("All features implemented.")],
             stop_reason: Some(StopReason::Stop),
             usage: None,
@@ -3931,6 +3944,7 @@ mod tests {
         // Normal streaming: text was already delivered via AgentMessageChunk
         // events, so no fallback is needed.
         let response = ConversationResponse {
+            provider_cost: None,
             items: vec![ConversationItem::assistant("Hello")],
             stop_reason: Some(StopReason::Stop),
             usage: None,
@@ -3949,6 +3963,7 @@ mod tests {
     fn test_fallback_text_none_for_empty_response() {
         // Truly empty response (no content, no chunks): no fallback.
         let response = ConversationResponse {
+            provider_cost: None,
             items: vec![ConversationItem::assistant("")],
             stop_reason: None,
             usage: None,
@@ -3971,6 +3986,7 @@ mod tests {
         // message_chunks_emitted is 0 even though the model did produce
         // content.  The fallback MUST fire in this case.
         let response = ConversationResponse {
+            provider_cost: None,
             items: vec![ConversationItem::assistant("Summary after reasoning.")],
             stop_reason: Some(StopReason::Stop),
             usage: None,
@@ -3992,6 +4008,7 @@ mod tests {
     fn test_fallback_text_none_for_tool_call_only_response() {
         // Tool-call-only response: no text content, no fallback needed.
         let response = ConversationResponse {
+            provider_cost: None,
             items: vec![ConversationItem::assistant_tool_calls(vec![ToolCall {
                 id: "1".into(),
                 name: "read_file".to_string(),

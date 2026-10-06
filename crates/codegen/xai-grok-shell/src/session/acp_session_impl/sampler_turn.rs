@@ -664,6 +664,7 @@ impl SessionActor {
             .get_sampling_config()
             .await
             .unwrap_or_else(|| xai_grok_sampling_types::SamplingConfig {
+                provider_profile: None,
                 base_url: String::new(),
                 model: String::new(),
                 max_completion_tokens: None,
@@ -706,11 +707,15 @@ impl SessionActor {
         };
         let auth_scheme = model_facts.auth_scheme;
         let mut extra_headers = cfg.extra_headers;
-        crate::agent::config::inject_url_derived_headers(
-            &mut extra_headers,
-            creds.alpha_test_key.as_deref(),
-            &cfg.base_url,
-        );
+        let provider_profile =
+            crate::agent::config::effective_provider_profile(cfg.provider_profile, &cfg.base_url);
+        if provider_profile.xai_extensions() {
+            crate::agent::config::inject_url_derived_headers(
+                &mut extra_headers,
+                creds.alpha_test_key.as_deref(),
+                &cfg.base_url,
+            );
+        }
         let compaction_at_tokens = self.compaction_at_tokens.get();
         let compactions_remaining = self.compactions_remaining.get();
         if compactions_remaining.is_some() || compaction_at_tokens.is_some() {
@@ -742,6 +747,7 @@ impl SessionActor {
             &cfg.base_url,
         );
         SamplingConfig {
+            provider_profile,
             api_key,
             base_url: cfg.base_url,
             model: cfg.model,
@@ -2106,11 +2112,12 @@ impl SessionActor {
             self.chat_state_handle
                 .record_token_usage(u64::from(u.total_tokens));
             self.chat_state_handle.record_last_turn_usage(u.clone());
-            self.chat_state_handle.record_model_call_usage(
+            self.chat_state_handle.record_provider_model_call_usage(
                 response.assistant().and_then(|a| a.model_id.clone()),
                 u.clone(),
                 api_duration_ms,
                 response.cost_usd_ticks,
+                response.provider_cost,
             );
             self.signals_handle()
                 .record_token_usage(u.completion_tokens, u.reasoning_tokens);

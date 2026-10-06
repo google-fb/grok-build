@@ -4,7 +4,78 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn messages_usage_drops_reasoning_tokens() {
+fn a4_messages_results_preserve_nullable_provider_money_and_flags() {
+    for (source_map, incomplete, partial, expected) in [
+        (
+            json!({"openrouter_usage_cost": 0.0}),
+            false,
+            false,
+            json!(0.0),
+        ),
+        (
+            json!({"openrouter_usage_cost": 0.2}),
+            false,
+            false,
+            json!(0.2),
+        ),
+        (json!({}), false, false, json!(null)),
+        (
+            json!({"openrouter_usage_cost": 0.2}),
+            true,
+            false,
+            json!(null),
+        ),
+        (
+            json!({"openrouter_usage_cost": 0.2}),
+            false,
+            true,
+            json!(null),
+        ),
+    ] {
+        let mut r = messages(false);
+        let aggregate = json!({"inputTokens": 100, "outputTokens": 10,
+            "cachedReadTokens": 20, "cacheCreationTokens": 5, "reasoningTokens": 3,
+            "costBySource": source_map, "usageIsIncomplete": incomplete, "costIsPartial": partial,
+            "modelUsage": {"synthetic": {"inputTokens": 100, "reasoningTokens": 3,
+                "costBySource": source_map, "costIsPartial": partial, "modelCalls": 1, "apiDurationMs": 12}}});
+        let out = r.finish(&TurnEnd {
+            stop_reason: "end_turn",
+            session_id: "sess-1",
+            request_id: "req-1",
+            usage: Some(&aggregate),
+            structured_output: None,
+            result_text: "",
+            duration_ms: 0,
+        });
+        let result = out.last().unwrap();
+        assert_eq!(result["total_cost_usd"], expected);
+        assert_eq!(result["total_cost_usd_ticks"], json!(null));
+        assert_eq!(
+            result["cost_unit"],
+            if expected.is_null() {
+                json!(null)
+            } else {
+                json!("USD")
+            }
+        );
+        assert_eq!(result["usage_is_incomplete"], incomplete);
+        assert_eq!(result["cost_is_partial"], partial);
+        assert_eq!(result["usage"]["input_tokens"], 75);
+        assert_eq!(result["usage"]["reasoning_tokens"], 3);
+        assert_eq!(result["modelUsage"]["synthetic"]["reasoningTokens"], 3);
+        assert_eq!(result["modelUsage"]["synthetic"]["modelCalls"], 1);
+        assert_eq!(result["modelUsage"]["synthetic"]["apiDurationMs"], 12);
+        assert_eq!(result["modelUsage"]["synthetic"]["costUSD"], expected);
+    }
+    let mut missing = messages(false);
+    let out = missing.finish(&end_turn());
+    let result = out.last().unwrap();
+    assert_eq!(result["total_cost_usd"], json!(null));
+    assert_eq!(result["usage_is_incomplete"], true);
+}
+
+#[test]
+fn a4_messages_usage_preserves_reasoning_tokens() {
     let mut r = messages(false);
     r.reduce(StreamEvent::AgentMessage("hi".into()));
     r.reduce(StreamEvent::ResponseCompleted {
@@ -24,7 +95,7 @@ fn messages_usage_drops_reasoning_tokens() {
     let usage = &msg["message"]["usage"];
     assert_eq!(usage["input_tokens"], 4);
     assert_eq!(usage["output_tokens"], 2);
-    assert!(usage.get("reasoning_tokens").is_none(), "{usage:?}");
+    assert_eq!(usage["reasoning_tokens"], 9);
 }
 
 #[test]
@@ -359,7 +430,7 @@ fn to_line_degrades_failing_serialize_to_error_line() {
 }
 
 #[test]
-fn non_finite_cost_serializes_to_finite_result_frame() {
+fn a4_non_finite_cost_serializes_to_null_result_frame() {
     let line = to_line(&MessagesLine::Result(Box::new(ResultLine {
         subtype: "success",
         is_error: false,
@@ -368,7 +439,12 @@ fn non_finite_cost_serializes_to_finite_result_frame() {
         num_turns: 1,
         result: None,
         stop_reason: None,
-        total_cost_usd: f64::INFINITY,
+        total_cost_usd: Some(f64::INFINITY),
+        total_cost_usd_ticks: None,
+        cost_sources: json!([]),
+        cost_unit: None,
+        usage_is_incomplete: false,
+        cost_is_partial: false,
         usage: MessageUsage::default(),
         model_usage: json!({}),
         structured_output: None,
@@ -377,20 +453,23 @@ fn non_finite_cost_serializes_to_finite_result_frame() {
         uuid: "u".into(),
     })));
     assert_eq!(line["type"], "result", "not the error fallback: {line}");
-    assert_eq!(line["total_cost_usd"], 0.0);
-    assert!(line["total_cost_usd"].as_f64().unwrap().is_finite());
+    assert_eq!(line["total_cost_usd"], json!(null));
 
     let mu = to_line(&ModelUsage {
+        model_calls: 0,
+        api_duration_ms: 0,
         input_tokens: 0,
         output_tokens: 0,
+        reasoning_tokens: 0,
         cache_read_input_tokens: 0,
         cache_creation_input_tokens: 0,
         web_search_requests: 0,
-        cost_usd: f64::NAN,
+        cost_usd: Some(f64::NAN),
+        cost_sources: json!([]),
         context_window: None,
     });
     assert_ne!(mu["type"], "error", "not the error fallback: {mu}");
-    assert_eq!(mu["costUSD"], 0.0);
+    assert_eq!(mu["costUSD"], json!(null));
 }
 
 #[test]

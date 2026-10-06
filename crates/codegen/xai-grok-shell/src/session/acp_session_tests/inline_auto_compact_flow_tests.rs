@@ -49,6 +49,7 @@ async fn create_test_actor(
     let chat_state_handle = xai_chat_state::ChatStateActor::spawn(
         vec![],
         xai_grok_sampling_types::SamplingConfig {
+            provider_profile: Some(xai_grok_sampling_types::ProviderProfile::Xai),
             base_url: "http://localhost".to_string(),
             model: "test".to_string(),
             max_completion_tokens: None,
@@ -462,6 +463,7 @@ async fn create_test_actor_with_memory(
     let chat_state_handle = xai_chat_state::ChatStateActor::spawn(
         vec![],
         xai_grok_sampling_types::SamplingConfig {
+            provider_profile: Some(xai_grok_sampling_types::ProviderProfile::Xai),
             base_url: "http://localhost".to_string(),
             model: "test".to_string(),
             max_completion_tokens: None,

@@ -1,5 +1,9 @@
 # Provider compatibility inventory
 
+This is the A3 historical diagnosis. A4's implementation contract and configuration
+are documented in [PROVIDERS.md](PROVIDERS.md); the gaps below describe the audited
+baseline, not the current implementation.
+
 Audited baseline: `3163a92fa84c012c9d5a0fa27d36404089eef6f3` (runtime source is
 still `0bf4d4bd539a`). This inventory adds source-backed tests, not a new provider
 implementation. The older external fork was not consulted.

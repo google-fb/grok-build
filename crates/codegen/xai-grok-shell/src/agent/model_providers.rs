@@ -21,6 +21,11 @@ pub struct ModelProviderConfig {
     pub auth_provider: Option<String>,
     pub auth: Option<crate::auth::AuthProviderConfig>,
     pub context_window: Option<u64>,
+    pub provider_profile: Option<xai_grok_sampling_types::ProviderProfile>,
+    pub allow_xai_credential_fallback: Option<bool>,
+    pub supports_reasoning_effort: Option<bool>,
+    pub supports_backend_search: Option<bool>,
+    pub stream_tool_calls: Option<bool>,
 }
 
 pub(crate) fn model_provider_auth_name(provider_id: &str) -> String {
@@ -158,13 +163,184 @@ pub(crate) fn parse_model_providers(
                     ConfigWarningKind::InvalidValue,
                     format!(
                         "failed to parse ({error}); provider skipped, inheriting models \
-                         resolve with defaults"
+                         are rejected during config loading"
                     ),
                 ));
             }
         }
     }
     (providers, warnings)
+}
+
+/// Connection intent cannot use the lenient catalog parser's fallback policy:
+/// dropping a routing field could send both credentials and prompts elsewhere.
+/// Validate before auth, model discovery, or any other startup network request.
+pub(crate) fn validate_model_connections(
+    raw: &toml::Value,
+    models: &IndexMap<String, ConfigModelOverride>,
+    providers: &IndexMap<String, ModelProviderConfig>,
+    model_warnings: &[ConfigWarning],
+    provider_warnings: &[ConfigWarning],
+) -> Result<(), String> {
+    use super::config_model_override_parse::WarningTarget;
+    use xai_grok_sampling_types::ProviderProfile;
+
+    if let Some(section) = raw.get("model") {
+        let Some(table) = section.as_table() else {
+            return Err(
+                "invalid model field <section>; model configuration must be a table".to_owned(),
+            );
+        };
+        for (id, entry) in table {
+            if !entry.is_table() {
+                return Err(format!(
+                    "invalid model.\"{id}\" field <entry>; model configuration must be a table"
+                ));
+            }
+        }
+    }
+    // Preserve deliberately configured enterprise defaults. Environment-only
+    // overrides of the built-in xAI URLs do not establish a provider identity.
+    let custom_global_endpoint = |field: &str| {
+        raw.get("endpoints")
+            .and_then(|v| v.get(field))
+            .and_then(toml::Value::as_str)
+            .is_some_and(|url| {
+                !url.trim().is_empty()
+                    && !crate::util::is_xai_api_bearer_url(url)
+                    && !crate::util::is_cli_chat_proxy_url(url)
+            })
+    };
+    let explicit_custom_defaults = custom_global_endpoint("models_base_url")
+        || (custom_global_endpoint("cli_chat_proxy_base_url")
+            && custom_global_endpoint("xai_api_base_url"));
+
+    for (model_id, model) in models {
+        let model_error = |field: &str| {
+            format!(
+                "invalid model.\"{model_id}\" field {field}; explicit valid connection required"
+            )
+        };
+        let raw_model = raw.get("model").and_then(|models| models.get(model_id));
+        if let Some(value) = raw_model.and_then(|model| model.get("model_provider"))
+            && !value.as_str().is_some_and(|id| !id.trim().is_empty())
+        {
+            return Err(model_error("model_provider"));
+        }
+        // These fields determine where requests/credentials go. Invalid values
+        // must not be pruned into an otherwise apparently valid xAI default.
+        for warning in model_warnings {
+            if let WarningTarget::Model {
+                key,
+                field: Some(field),
+            } = &warning.target
+                && key == model_id
+                && warning.kind == ConfigWarningKind::InvalidValue
+                && matches!(
+                    field.as_str(),
+                    "model_provider"
+                        | "provider_profile"
+                        | "base_url"
+                        | "api_base_url"
+                        | "api_backend"
+                        | "api_key"
+                        | "env_key"
+                        | "auth_provider"
+                        | "allow_xai_credential_fallback"
+                )
+            {
+                return Err(model_error(field));
+            }
+        }
+        let effective = if let Some(provider_id) = model.model_provider.as_deref() {
+            let provider_error = |field: &str| {
+                format!(
+                    "invalid model_providers.\"{provider_id}\" field {field}; referenced by model.\"{model_id}\"; provider configuration rejected"
+                )
+            };
+            let Some(value) = raw.get("model_providers").and_then(|p| p.get(provider_id)) else {
+                return Err(format!(
+                    "undefined model_provider \"{provider_id}\" referenced by model.\"{model_id}\"; provider configuration rejected"
+                ));
+            };
+            let Some(provider) = providers.get(provider_id) else {
+                let fields: Vec<_> = value
+                    .as_table()
+                    .map(|table| {
+                        table
+                            .iter()
+                            .filter_map(|(field, value)| {
+                                let one = toml::Value::Table(
+                                    [(field.clone(), value.clone())].into_iter().collect(),
+                                );
+                                one.try_into::<ModelProviderConfig>()
+                                    .is_err()
+                                    .then_some(field.as_str())
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                return Err(provider_error(&if fields.is_empty() {
+                    "<entry>".to_owned()
+                } else {
+                    fields.join(", ")
+                }));
+            };
+            // Reject arbitrary misspellings, not just a list of known typos.
+            // Unreferenced provider tables continue to produce warnings only.
+            for warning in provider_warnings {
+                if let WarningTarget::ModelProvider {
+                    id,
+                    field: Some(field),
+                } = &warning.target
+                    && id == provider_id
+                    && warning.kind == ConfigWarningKind::UnknownField
+                {
+                    return Err(provider_error(field));
+                }
+            }
+            model.with_provider_defaults(provider, provider_id)
+        } else {
+            model.clone()
+        };
+        for (field, value) in [
+            ("base_url", &effective.base_url),
+            ("api_base_url", &effective.api_base_url),
+        ] {
+            if value.as_deref().is_some_and(|url| url.trim().is_empty()) {
+                return Err(model_error(field));
+            }
+        }
+        if effective.base_url.is_none() {
+            // A typo can otherwise hide all evidence of a custom connection,
+            // even when no explicit profile or credential remains after parse.
+            for warning in model_warnings {
+                if let WarningTarget::Model {
+                    key,
+                    field: Some(field),
+                } = &warning.target
+                    && key == model_id
+                    && warning.kind == ConfigWarningKind::UnknownField
+                {
+                    return Err(model_error(field));
+                }
+            }
+            let own_credential = effective.api_key.is_some()
+                || effective.env_key.is_some()
+                || effective.auth_provider.is_some();
+            let connection_intent = model.model_provider.is_some()
+                || effective.provider_profile.is_some()
+                || own_credential
+                || effective.api_base_url.is_some();
+            if connection_intent
+                && (effective.provider_profile != Some(ProviderProfile::Xai) || own_credential)
+                && !(model.model_provider.is_none() && explicit_custom_defaults)
+            {
+                return Err(model_error("base_url"));
+            }
+        }
+    }
+    Ok(())
 }
 
 impl ConfigModelOverride {
@@ -185,6 +361,11 @@ impl ConfigModelOverride {
             auth_provider,
             auth,
             context_window,
+            provider_profile,
+            allow_xai_credential_fallback,
+            supports_reasoning_effort,
+            supports_backend_search,
+            stream_tool_calls,
         } = provider;
 
         let mut merged = self.clone();
@@ -193,6 +374,25 @@ impl ConfigModelOverride {
         merged.api_base_url = merged.api_base_url.or_else(|| api_base_url.clone());
         merged.api_backend = merged.api_backend.or_else(|| api_backend.clone());
         merged.context_window = merged.context_window.or(*context_window);
+        merged.provider_profile = merged
+            .provider_profile
+            .or(*provider_profile)
+            .or(Some(xai_grok_sampling_types::ProviderProfile::Compatible));
+        merged.allow_xai_credential_fallback = merged
+            .allow_xai_credential_fallback
+            .or(*allow_xai_credential_fallback);
+        merged.supports_reasoning_effort = merged
+            .supports_reasoning_effort
+            .or(*supports_reasoning_effort)
+            .or(Some(false));
+        merged.supports_backend_search = merged
+            .supports_backend_search
+            .or(*supports_backend_search)
+            .or(Some(false));
+        merged.stream_tool_calls = merged
+            .stream_tool_calls
+            .or(*stream_tool_calls)
+            .or(Some(false));
         // Inherited wholesale only when the model sets none of its own.
         if merged.extra_headers.is_empty() {
             merged.extra_headers = extra_headers.clone();
@@ -256,14 +456,17 @@ mod tests {
         let credentials = resolve_credentials(model, Some("synthetic-session-token"));
         assert_eq!(model.info.model, "vendor/model");
         assert_eq!(credentials.base_url, "https://provider.example/v1");
-        assert_eq!(credentials.api_key.as_deref(), Some("synthetic-provider-key"));
+        assert_eq!(
+            credentials.api_key.as_deref(),
+            Some("synthetic-provider-key")
+        );
         assert_eq!(
             model.info.api_backend,
             crate::sampling::ApiBackend::ChatCompletions
         );
         assert!(!model.info.supports_reasoning_effort);
         assert!(!model.info.supports_backend_search);
-        assert_eq!(model.info.stream_tool_calls, None);
+        assert_eq!(model.info.stream_tool_calls, Some(false));
         // Existing fallback, not a discovered capability of the remote model.
         assert_eq!(model.info.context_window.get(), 200_000);
     }
@@ -294,7 +497,7 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
-    fn a3_direct_model_baseline_falls_back_to_xai_credentials() {
+    fn a4_direct_model_missing_key_does_not_fall_back_to_xai_credentials() {
         let _missing = xai_grok_test_support::EnvGuard::unset("ASTRA_A3_UNSET_KEY");
         let _global = xai_grok_test_support::EnvGuard::set("XAI_API_KEY", "synthetic-global-key");
         let raw: toml::Value = toml::from_str(
@@ -308,17 +511,121 @@ mod tests {
         .unwrap();
         let cfg = Config::new_from_toml_cfg(&raw).unwrap();
         let models = resolve_model_list(&cfg, None);
-        // Baseline gap: direct model settings omit the group fail-closed guard.
-        // A4 must update these assertions when introducing the chosen policy,
-        // including the existing explicit custom-gateway use case.
-        for (session, expected) in [
-            (Some("synthetic-session"), "synthetic-session"),
-            (None, "synthetic-global-key"),
-        ] {
+        for session in [Some("synthetic-session"), None] {
             let credentials = resolve_credentials(&models["direct"], session);
-            assert_eq!(credentials.api_key.as_deref(), Some(expected));
+            assert_eq!(credentials.api_key, None);
             assert_eq!(credentials.base_url, "https://provider.example/v1");
         }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a4_direct_endpoints_never_inherit_xai_credentials_without_opt_in() {
+        let _missing = xai_grok_test_support::EnvGuard::unset("ASTRA_A4_UNSET_KEY");
+        for legacy in [false, true] {
+            let _new = if legacy {
+                xai_grok_test_support::EnvGuard::unset("XAI_API_KEY")
+            } else {
+                xai_grok_test_support::EnvGuard::set("XAI_API_KEY", "synthetic-global")
+            };
+            let _old = if legacy {
+                xai_grok_test_support::EnvGuard::set("GROK_CODE_XAI_API_KEY", "synthetic-global")
+            } else {
+                xai_grok_test_support::EnvGuard::unset("GROK_CODE_XAI_API_KEY")
+            };
+            for endpoint in [
+                "https://provider.example/v1",
+                "https://x.ai.provider.example/v1",
+                "http://127.0.0.1:8000/v1",
+            ] {
+                for env_line in ["", "env_key = 'ASTRA_A4_UNSET_KEY'"] {
+                    let raw: toml::Value = toml::from_str(&format!(
+                        "[model.direct]\nbase_url = '{endpoint}'\n{env_line}\nmodel = 'vendor/model'"
+                    )).unwrap();
+                    let cfg = Config::new_from_toml_cfg(&raw).unwrap();
+                    let models = resolve_model_list(&cfg, None);
+                    for session in [Some("synthetic-session"), None] {
+                        let credentials = resolve_credentials(&models["direct"], session);
+                        assert_eq!(
+                            credentials.api_key, None,
+                            "endpoint={endpoint}, legacy={legacy}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a4_api_base_url_and_explicit_gateway_policy() {
+        let _key = xai_grok_test_support::EnvGuard::set("XAI_API_KEY", "synthetic-global");
+        for allow in [false, true] {
+            let raw: toml::Value = toml::from_str(&format!(
+                "[model.direct]\nbase_url = 'https://api.x.ai/v1'\napi_base_url = 'https://gateway.example/v1'\nallow_xai_credential_fallback = {allow}"
+            )).unwrap();
+            let cfg = Config::new_from_toml_cfg(&raw).unwrap();
+            let models = resolve_model_list(&cfg, None);
+            let credentials = resolve_credentials(&models["direct"], None);
+            assert_eq!(
+                credentials.api_key.as_deref(),
+                allow.then_some("synthetic-global")
+            );
+            assert_eq!(credentials.base_url, "https://gateway.example/v1");
+            let credentials = resolve_credentials(&models["direct"], Some("synthetic-session"));
+            assert_eq!(credentials.api_key.as_deref(), Some("synthetic-session"));
+            assert_eq!(credentials.base_url, "https://api.x.ai/v1");
+        }
+        let raw: toml::Value = toml::from_str(
+            "[model.gateway]\nbase_url = 'https://gateway.example/v1'\nallow_xai_credential_fallback = true\nprovider_profile = 'xai'"
+        ).unwrap();
+        let cfg = Config::new_from_toml_cfg(&raw).unwrap();
+        let models = resolve_model_list(&cfg, None);
+        let credentials = resolve_credentials(&models["gateway"], Some("synthetic-session"));
+        assert_eq!(credentials.api_key.as_deref(), Some("synthetic-session"));
+    }
+
+    #[test]
+    fn a4_provider_capabilities_inherit_and_model_can_disable_them() {
+        let raw: toml::Value = toml::from_str(
+            r#"
+            [model_providers.p]
+            base_url = "https://provider.example/v1"
+            provider_profile = "openrouter"
+            supports_reasoning_effort = true
+            supports_backend_search = true
+            stream_tool_calls = true
+            [model.enabled]
+            model_provider = "p"
+            [model.disabled]
+            model_provider = "p"
+            supports_reasoning_effort = false
+            supports_backend_search = false
+            stream_tool_calls = false
+        "#,
+        )
+        .unwrap();
+        let cfg = Config::new_from_toml_cfg(&raw).unwrap();
+        let models = resolve_model_list(&cfg, None);
+        let on = &models["enabled"];
+        assert!(on.info.supports_reasoning_effort && on.info.supports_backend_search);
+        assert_eq!(on.info.stream_tool_calls, Some(true));
+        let off = &models["disabled"];
+        assert!(!off.info.supports_reasoning_effort && !off.info.supports_backend_search);
+        assert_eq!(off.info.stream_tool_calls, Some(false));
+        let sampler = crate::agent::config::sampling_config_for_model(
+            off,
+            resolve_credentials(off, None),
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(
+            sampler.provider_profile,
+            xai_grok_sampling_types::ProviderProfile::Openrouter
+        );
+        assert!(sampler.extra_headers.is_empty());
     }
 
     #[test]
@@ -463,69 +770,27 @@ mod tests {
     }
 
     #[test]
-    fn undefined_model_provider_fails_closed() {
-        use super::super::config_model_override_parse::{ConfigWarningKind, WarningTarget};
-
-        let raw_config: toml::Value = toml::from_str(
-            r#"
-            [model.dangling]
-            model = "m"
-            base_url = "https://third-party.example/v1"
-            context_window = 200000
-            model_provider = "ghost"
-            "#,
-        )
-        .unwrap();
-
-        let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-        assert!(
-            cfg.config_warnings.iter().any(|w| {
-                w.kind == ConfigWarningKind::InvalidValue
-                    && matches!(
-                        &w.target,
-                        WarningTarget::Model { field, .. }
-                            if field.as_deref() == Some("model_provider")
-                    )
-            }),
-            "an undefined provider reference warns: {:?}",
-            cfg.config_warnings
-        );
-        let resolved = resolve_model_list(&cfg, None);
-        let model = resolved.get("dangling").expect("model should exist");
-        assert_eq!(
-            model.info.base_url, "https://third-party.example/v1",
-            "the model keeps its own connection fields"
-        );
-        assert!(
-            model.has_own_credentials(),
-            "an undefined provider leaves the model BYOK, not session-authed"
-        );
-        let creds = resolve_credentials(model, Some("session-jwt"));
-        assert_eq!(
-            creds.api_key, None,
-            "no credential resolves and the session token does not leak to the model's base_url"
-        );
-    }
-
-    #[test]
-    fn undefined_model_provider_keeps_model_own_key() {
-        let raw_config: toml::Value = toml::from_str(
-            r#"
-            [model.own-key]
-            model = "m"
-            base_url = "https://third-party.example/v1"
-            context_window = 200000
-            api_key = "sk-model-own"
-            model_provider = "ghost"
-            "#,
-        )
-        .unwrap();
-
-        let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-        let resolved = resolve_model_list(&cfg, None);
-        let model = resolved.get("own-key").expect("model should exist");
-        let creds = resolve_credentials(model, Some("session-jwt"));
-        assert_eq!(creds.api_key.as_deref(), Some("sk-model-own"));
+    fn undefined_model_provider_fails_closed_even_with_own_key() {
+        for connection in [
+            "",
+            "base_url = \"https://third-party.example/v1\"",
+            "base_url = \"https://third-party.example/v1\"\napi_key = \"synthetic-key\"",
+        ] {
+            let raw: toml::Value = toml::from_str(&format!(
+                r#"
+                [model.dangling]
+                model = "m"
+                model_provider = "ghost"
+                {connection}
+            "#
+            ))
+            .unwrap();
+            let error = match Config::new_from_toml_cfg(&raw) {
+                Ok(_) => panic!("undefined provider must not fall back to any endpoint"),
+                Err(error) => error,
+            };
+            assert!(error.contains("ghost") && error.contains("model_provider"));
+        }
     }
 
     #[test]
@@ -544,11 +809,6 @@ mod tests {
             base_url = "https://typo.example/v1"
             unknown_field = 5
 
-            [model.on-broken-provider]
-            model = "m"
-            base_url = "https://x.example/v1"
-            context_window = 200000
-            model_provider = "bad-type"
             "#,
         )
         .unwrap();
@@ -604,6 +864,170 @@ mod tests {
             }),
             "non-table section warns: {:?}",
             cfg.config_warnings
+        );
+    }
+
+    #[test]
+    fn referenced_malformed_provider_rejected_before_resolution() {
+        for (field, value) in [
+            ("provider_profile", "\"openroute-typo\""),
+            ("supports_reasoning_effort", "\"yes\""),
+            ("supports_backend_search", "\"yes\""),
+            ("stream_tool_calls", "\"yes\""),
+            ("allow_xai_credential_fallback", "\"yes\""),
+            ("api_backend", "\"typo\""),
+            ("context_window", "\"bad\""),
+        ] {
+            let raw: toml::Value = toml::from_str(&format!(
+                r#"
+                [model_providers.broken]
+                base_url = "https://provider.example/v1"
+                api_key = "synthetic-do-not-echo"
+                {field} = {value}
+                [model.test]
+                model_provider = "broken"
+                model = "synthetic-model"
+            "#
+            ))
+            .unwrap();
+            let error = match Config::new_from_toml_cfg(&raw) {
+                Ok(_) => panic!("malformed referenced provider accepted: {field}"),
+                Err(error) => error,
+            };
+            assert!(error.contains("broken") && error.contains(field), "{error}");
+            assert!(
+                !error.contains("synthetic-do-not-echo"),
+                "must not echo credentials"
+            );
+        }
+    }
+
+    #[test]
+    fn connection_intent_never_inherits_an_implicit_xai_endpoint() {
+        let provider_cases = [
+            (
+                "base_ur",
+                "base_ur = \"https://provider.example/v1\"\nprovider_profile = \"openrouter\"",
+            ),
+            (
+                "api_base",
+                "api_base = \"https://provider.example/v1\"\nenv_key = \"SYNTHETIC_PROVIDER_KEY\"",
+            ),
+            ("base_uri", "base_uri = \"https://provider.example/v1\""),
+            (
+                "endpoint_url",
+                "endpoint_url = \"https://provider.example/v1\"\nprovider_profile = \"xai\"",
+            ),
+            ("base_url", "provider_profile = \"openrouter\""),
+            ("base_url", "provider_profile = \"vllm\""),
+            (
+                "base_url",
+                "provider_profile = \"xai\"\napi_key = \"synthetic-do-not-echo\"",
+            ),
+            ("base_url", "provider_profile = \"compatible\""),
+            ("base_url", "api_key = \"synthetic-do-not-echo\""),
+            ("base_url", "base_url = \"   \""),
+        ];
+        for (field, settings) in provider_cases {
+            let raw: toml::Value = toml::from_str(&format!(
+                "[model_providers.synthetic]\n{settings}\n[model.test]\nmodel_provider = \"synthetic\"\nmodel = \"synthetic-model\""
+            )).unwrap();
+            let error = Config::new_from_toml_cfg(&raw)
+                .err()
+                .expect("unsafe fallback accepted");
+            assert!(error.contains(field), "{error}");
+            assert!(!error.contains("synthetic-do-not-echo"));
+        }
+        for value in ["[\"synthetic\"]", "7", "false", "{}", "\"\"", "\"  \""] {
+            let raw: toml::Value = toml::from_str(&format!(
+                "[model.test]\nmodel_provider = {value}\nbase_url = \"https://provider.example/v1\"\napi_key = \"synthetic-do-not-echo\""
+            )).unwrap();
+            let error = Config::new_from_toml_cfg(&raw)
+                .err()
+                .expect("invalid provider reference accepted");
+            assert!(error.contains("model_provider"), "{error}");
+            assert!(!error.contains("synthetic-do-not-echo"));
+        }
+        for (field, settings) in [
+            ("base_url", "api_key = \"synthetic-do-not-echo\""),
+            ("base_url", "provider_profile = \"vllm\""),
+            (
+                "base_url",
+                "provider_profile = \"xai\"\napi_key = \"synthetic-do-not-echo\"",
+            ),
+            ("base_url", "base_url = 7"),
+            (
+                "provider_profile",
+                "provider_profile = \"typo\"\nbase_url = \"https://provider.example/v1\"",
+            ),
+            ("baseURL", "baseURL = \"https://provider.example/v1\""),
+        ] {
+            let raw: toml::Value = toml::from_str(&format!("[model.test]\n{settings}")).unwrap();
+            let error = Config::new_from_toml_cfg(&raw)
+                .err()
+                .expect("invalid model connection accepted");
+            assert!(error.contains(field), "{error}");
+            assert!(!error.contains("synthetic-do-not-echo"));
+        }
+    }
+
+    #[test]
+    fn invalid_model_tables_cannot_discard_connection_intent() {
+        for text in ["model = []", "[model]\nsynthetic = false"] {
+            let raw: toml::Value = toml::from_str(text).unwrap();
+            let error = Config::new_from_toml_cfg(&raw)
+                .err()
+                .expect("invalid model table accepted");
+            assert!(error.contains("invalid model"));
+        }
+    }
+
+    #[test]
+    fn explicit_connections_and_unused_bad_providers_remain_valid() {
+        let empty: toml::Value = toml::from_str("").unwrap();
+        let defaults = Config::new_from_toml_cfg(&empty).unwrap();
+        assert!(!resolve_model_list(&defaults, None).is_empty());
+        for profile in ["openrouter", "vllm", "compatible", "xai"] {
+            let raw: toml::Value = toml::from_str(&format!(
+                r#"
+                [model_providers.unused]
+                base_ur = "https://unused.example/v1"
+                [model_providers.valid]
+                base_url = "https://provider.example/v1"
+                provider_profile = "{profile}"
+                [model.valid]
+                model_provider = "valid"
+            "#
+            ))
+            .unwrap();
+            let cfg = Config::new_from_toml_cfg(&raw).unwrap();
+            assert!(!cfg.config_warnings.is_empty());
+            let models = resolve_model_list(&cfg, None);
+            assert_eq!(models["valid"].info.base_url, "https://provider.example/v1");
+        }
+        let raw: toml::Value = toml::from_str(
+            r#"
+            [model.explicit-xai]
+            provider_profile = "xai"
+            base_url = "https://api.x.ai/v1"
+            api_key = "synthetic-xai-key"
+        "#,
+        )
+        .unwrap();
+        assert!(Config::new_from_toml_cfg(&raw).is_ok());
+        let raw: toml::Value = toml::from_str(
+            r#"
+            [endpoints]
+            models_base_url = "https://enterprise.example/v1"
+            [model.custom]
+            api_key = "synthetic-enterprise-key"
+        "#,
+        )
+        .unwrap();
+        let cfg = Config::new_from_toml_cfg(&raw).unwrap();
+        assert_eq!(
+            resolve_model_list(&cfg, None)["custom"].info.base_url,
+            "https://enterprise.example/v1"
         );
     }
 

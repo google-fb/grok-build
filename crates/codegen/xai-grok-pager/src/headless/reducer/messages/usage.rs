@@ -15,7 +15,12 @@ pub(super) struct ResultUsage {
     pub(super) usage: MessageUsage,
     pub(super) model_usage: Value,
     pub(super) num_turns: u64,
-    pub(super) total_cost_usd: f64,
+    pub(super) total_cost_usd: Option<f64>,
+    pub(super) total_cost_usd_ticks: Option<i64>,
+    pub(super) cost_sources: Value,
+    pub(super) cost_unit: Option<&'static str>,
+    pub(super) usage_is_incomplete: bool,
+    pub(super) cost_is_partial: bool,
     pub(super) duration_api_ms: u64,
 }
 
@@ -35,6 +40,10 @@ impl MessagesReducer {
         let usage_is_incomplete = scratch
             .get("usage_is_incomplete")
             .and_then(Value::as_bool)
+            .unwrap_or(end_usage.is_none());
+        let cost_is_partial = scratch
+            .get("cost_is_partial")
+            .and_then(Value::as_bool)
             .unwrap_or(false);
         if end_usage.is_none() {
             tracing::warn!(
@@ -50,6 +59,7 @@ impl MessagesReducer {
             );
         }
         let usage = MessageUsage {
+            reasoning_tokens: field(u, "reasoning_tokens"),
             input_tokens: field(u, "input_tokens"),
             output_tokens: field(u, "output_tokens"),
             cache_read_input_tokens: field(u, "cache_read_input_tokens"),
@@ -62,10 +72,13 @@ impl MessagesReducer {
             .get("num_turns")
             .and_then(Value::as_u64)
             .unwrap_or(self.completed_responses);
-        let total_cost_usd = scratch
-            .get("total_cost_usd")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0);
+        let total_cost_usd = scratch.get("total_cost_usd").and_then(Value::as_f64);
+        let total_cost_usd_ticks = scratch.get("total_cost_usd_ticks").and_then(Value::as_i64);
+        let cost_sources = scratch
+            .get("cost_sources")
+            .cloned()
+            .unwrap_or_else(|| json!([]));
+        let cost_unit = total_cost_usd.map(|_| "USD");
         // `apiDurationMs` is dropped by the projection, so read it from `end_usage`.
         let duration_api_ms = end_usage.map_or(0, |u| field(Some(u), "apiDurationMs"));
         // Attribute the whole web-search count to the current model (only a global count is tracked).
@@ -80,6 +93,11 @@ impl MessagesReducer {
             model_usage,
             num_turns,
             total_cost_usd,
+            total_cost_usd_ticks,
+            cost_sources,
+            cost_unit,
+            usage_is_incomplete,
+            cost_is_partial,
             duration_api_ms,
         }
     }
@@ -104,12 +122,16 @@ pub(super) fn messages_model_usage(
             (
                 model.clone(),
                 to_line(&ModelUsage {
+                    model_calls: n("modelCalls"),
+                    api_duration_ms: n("apiDurationMs"),
+                    reasoning_tokens: n("reasoningTokens"),
                     input_tokens: n("inputTokens"),
                     output_tokens: n("outputTokens"),
                     cache_read_input_tokens: n("cacheReadInputTokens"),
                     cache_creation_input_tokens: n("cacheCreationInputTokens"),
                     web_search_requests: if is_current { web_search_requests } else { 0 },
-                    cost_usd: row.get("costUSD").and_then(Value::as_f64).unwrap_or(0.0),
+                    cost_usd: row.get("costUSD").and_then(Value::as_f64),
+                    cost_sources: row.get("costSources").cloned().unwrap_or_else(|| json!([])),
                     context_window: if is_current { context_window } else { None },
                 }),
             )

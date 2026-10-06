@@ -3767,6 +3767,7 @@ mod last_sample_span_tests {
         completion_tokens: u32,
     ) -> ConversationResponse {
         let mut response = ConversationResponse {
+            provider_cost: None,
             items: vec![ConversationItem::assistant("")],
             stop_reason,
             usage: Some(TokenUsage {

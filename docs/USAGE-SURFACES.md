@@ -1,5 +1,11 @@
 # Usage surface audit (baseline `0bf4d4bd539a`)
 
+This table records the A1 baseline. A4 now preserves per-model reasoning and
+provider money, and uses explicit null for untrustworthy headless costs. See
+[PROVIDERS.md](PROVIDERS.md) for the current contract. The executable probe tests
+have been updated for that contract; they still do not test individual call
+history or auxiliary-call accounting.
+
 The baseline does **not** universally expose dollars without tokens. Its native
 ledger and plain JSON projection already include input, output, cached, and
 reasoning totals. Format selection, aggregation, interrupted output, and

@@ -132,7 +132,7 @@ stream_tool_calls           = true
 
 This is a small, fixed set of environment-wide knobs. Settings that identify a specific model (`model`, `base_url`, `api_key`, `context_window`, ...) cannot be defaulted this way, and a few settings with their own dedicated configuration -- auto-compaction (`[session]`), the system-prompt label (`[agent]`), and reasoning effort (`[models].default_reasoning_effort`) -- keep their existing homes.
 
-> **Note on `stream_tool_calls`:** this one affects request *shape*, not just sampling. A few endpoints (some BYOK providers) expect it left unset; if a global `stream_tool_calls = true` causes problems for such a model, opt that model out with `stream_tool_calls = false` in its `[model.<id>]` block.
+> **Note on `stream_tool_calls`:** this xAI extension affects request shape, separately from standard Chat Completions tool-call deltas. Custom models now default to `false`, which overrides a global `[models].stream_tool_calls = true`. Set the capability explicitly in `[model_providers.<id>]` or `[model.<id>]` only for an endpoint that supports it; the model-level value has priority. Built-in xAI models keep their own catalog defaults.
 
 ### Request Query Parameters
 
@@ -171,17 +171,27 @@ Both fields also work on a shared `[model_providers.<id>]` block. A model that p
 You can override specific fields of built-in models without redefining everything. Only specify the fields you want to change:
 
 ```toml
-# Override only the API key for a default model
-[model.grok-4.6]
+# Explicitly keep the xAI endpoint when overriding its API key
+[model."grok-4.6"]
+provider_profile = "xai"
+base_url = "https://api.x.ai/v1"
 api_key = "my-api-key"
+```
 
+Or also override the temperature:
+
+```toml
 # Override temperature and add a custom API key
-[model.grok-4.6]
+[model."grok-4.6"]
+provider_profile = "xai"
+base_url = "https://api.x.ai/v1"
 temperature = 0.5
 api_key = "sk-custom"
 ```
 
-When you override a built-in model, Grok starts with the default configuration (including the correct `base_url`), then applies only the fields you specify. Unspecified fields inherit from the default.
+When you override a built-in model, Grok starts with the default configuration (including the correct `base_url`), then applies only the fields you specify. Unspecified fields inherit from the default. A per-model credential must have an
+explicit `base_url` (or inherit explicitly configured custom enterprise endpoints),
+so a misspelled third-party endpoint cannot silently send that credential to xAI.
 
 ### Priority Order
 
@@ -298,7 +308,7 @@ grok
 models_base_url = "https://api.acme.com/v1"
 
 # Override only the API key for a specific model
-[model.grok-4.6]
+[model."grok-4.6"]
 api_key = "my-api-key"
 ```
 

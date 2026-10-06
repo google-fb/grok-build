@@ -561,6 +561,7 @@ pub fn stream_messages<'a>(
             InferenceLatencyStats::from_timestamps(stream_start, &chunk_timestamps, stream_end);
 
         let response = ConversationResponse {
+            provider_cost: None,
             items,
             stop_reason,
             usage,
