@@ -535,7 +535,7 @@ impl MvpAgent {
                     client_fs_write,
                     envrc: None,
                     persisted_signals: None,
-                    persisted_usage: None,
+                    persisted_usage: Some(xai_chat_state::UsageLedger::new_recorded_session()),
                     persisted_plan_mode: None,
                     persisted_goal_mode: None,
                     persisted_workflow_runs: Vec::new(),

@@ -24,8 +24,38 @@ pub struct WebSearchClient {
     /// from the Responses API emits an `auth_401_attribution` event
     /// with `consumer == "WebSearch"`.
     attribution_callback: Option<SharedAttributionCallback>,
+    usage_observer: Option<xai_grok_usage::UsageObserver>,
+    provider_profile: xai_grok_usage::ProviderProfile,
 }
 impl WebSearchClient {
+    pub fn with_provider_profile(mut self, profile: xai_grok_usage::ProviderProfile) -> Self {
+        self.provider_profile = profile;
+        self
+    }
+
+    async fn send_observed(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, xai_grok_usage::http::RequestError> {
+        if let Some(observer) = &self.usage_observer {
+            xai_grok_usage::http::JsonRequestObserver {
+                observer: observer.for_purpose(xai_grok_usage::CallPurpose::WebSearch),
+                model: self.model.clone(),
+                provider: self.provider_profile,
+                backend: xai_grok_usage::CallBackend::Responses,
+            }
+            .send(request)
+            .await
+        } else {
+            Ok(request.send().await?)
+        }
+    }
+
+    pub fn with_usage_observer(mut self, observer: Option<xai_grok_usage::UsageObserver>) -> Self {
+        self.usage_observer = observer;
+        self
+    }
+
     /// Create a new web search client from `WebSearchConfig::Enabled`.
     ///
     /// Returns `Err` if the config is `Disabled` or if header values are invalid.
@@ -95,6 +125,8 @@ impl WebSearchClient {
             default_excluded_domains: excluded_domains.clone(),
             api_key_provider,
             attribution_callback: None,
+            usage_observer: None,
+            provider_profile: xai_grok_usage::ProviderProfile::Compatible,
         })
     }
     /// Resolve the effective domain filters for a request.
@@ -216,7 +248,7 @@ impl WebSearchClient {
         if let Some(ref key) = sent_bearer {
             req = req.header(AUTHORIZATION, format!("Bearer {key}"));
         }
-        let response = req.send().await.map_err(|e| {
+        let response = self.send_observed(req).await.map_err(|e| {
             xai_tool_runtime::ToolError::execution(
                 xai_tool_protocol::ToolId::new("web_search").expect("valid"),
                 format!("HTTP request failed: {e}"),
@@ -285,7 +317,7 @@ impl WebSearchClient {
         if let Some(ref key) = sent_bearer {
             req = req.header(AUTHORIZATION, format!("Bearer {key}"));
         }
-        let response = req.send().await.map_err(|e| {
+        let response = self.send_observed(req).await.map_err(|e| {
             xai_tool_runtime::ToolError::execution(
                 xai_tool_protocol::ToolId::new("web_search").expect("valid"),
                 format!("HTTP request failed: {e}"),

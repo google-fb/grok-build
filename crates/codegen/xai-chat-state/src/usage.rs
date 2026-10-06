@@ -180,9 +180,21 @@ pub struct UsageLedger {
     pub main_loop_model_calls: u64,
     /// Bill may under-count (drain timeout, nested subagent incomplete, apply failure).
     pub incomplete: bool,
+    /// Session-wide physical requests; independent of the legacy accepted-call totals.
+    /// Missing in historical files means the earlier request history is unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_usage: Option<xai_grok_usage::CallLedger>,
 }
 
 impl UsageLedger {
+    /// Only creation of a brand-new session can assert complete request history.
+    pub fn new_recorded_session() -> Self {
+        Self {
+            request_usage: Some(xai_grok_usage::CallLedger::new(true)),
+            ..Self::default()
+        }
+    }
+
     /// Fold one main-agent-loop model call. This is the only writer of
     /// `main_loop_model_calls` (the wire `numTurns`); side calls such as
     /// compaction must not use it.

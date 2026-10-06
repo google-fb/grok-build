@@ -39,6 +39,7 @@ async fn persist_ack_waits_for_disk_flush_before_success() {
                 cwd: cwd.as_str().to_string(),
             };
             let sampling_client = crate::sampling::Client::new(xai_grok_sampler::SamplerConfig {
+                usage_observer: None,
                 provider_profile: xai_grok_sampling_types::ProviderProfile::Xai,
                 api_key: Some("test-key".to_string()),
                 base_url: "http://localhost".to_string(),
@@ -114,6 +115,7 @@ async fn persist_ack_waits_for_disk_flush_before_success() {
                 tokio_util::sync::CancellationToken::new(),
             );
             let actor = Arc::new(SessionActor {
+                usage_observer: None,
                 transient_retry_enabled: true,
                 transient_retries_prompt_total: std::cell::Cell::new(0),
                 transient_episode_start: std::cell::Cell::new(None),
@@ -455,6 +457,7 @@ async fn first_turn_memory_injection_persists_to_chat_history() {
                 cwd: session_dir.path().to_string_lossy().to_string(),
             };
             let sampling_client = crate::sampling::Client::new(xai_grok_sampler::SamplerConfig {
+                usage_observer: None,
                     provider_profile: xai_grok_sampling_types::ProviderProfile::Xai,
                     api_key: Some("test-key".to_string()),
                     base_url: "http://localhost".to_string(),
@@ -592,6 +595,7 @@ async fn first_turn_memory_injection_disabled_does_not_persist_to_chat_history()
             let tool_context =
                 ToolContext::new(cwd.clone(), None, None, fs, terminal, hunk_tracker_handle);
             let sampling_client = crate::sampling::Client::new(xai_grok_sampler::SamplerConfig {
+                usage_observer: None,
                 provider_profile: xai_grok_sampling_types::ProviderProfile::Xai,
                 api_key: Some("test-key".to_string()),
                 base_url: "http://localhost".to_string(),
@@ -676,6 +680,8 @@ async fn first_turn_memory_injection_disabled_does_not_persist_to_chat_history()
                 crate::session::memory::MemoryStorage::new(session_dir.path(), None);
             memory_storage.ensure_initialized().unwrap();
             let memory_backend_params = crate::session::memory::MemoryBackendParams {
+                provider_profile: Default::default(),
+                usage_observer: None,
                 session_id: session_info.id.to_string(),
                 embed_config: None,
                 embed_base_url: "http://localhost".to_string(),
@@ -689,6 +695,7 @@ async fn first_turn_memory_injection_disabled_does_not_persist_to_chat_history()
             };
             let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel::<SessionEvent>();
             let actor = Arc::new(SessionActor {
+                usage_observer: None,
                 transient_retry_enabled: true,
                 transient_retries_prompt_total: std::cell::Cell::new(0),
                 transient_episode_start: std::cell::Cell::new(None),
@@ -996,6 +1003,7 @@ async fn cancel_running_task_teardown_clears_running_and_pending_work() {
                 )
                 .await;
             let actor = SessionActor {
+                usage_observer: None,
                 transient_retry_enabled: true,
                 transient_retries_prompt_total: std::cell::Cell::new(0),
                 transient_episode_start: std::cell::Cell::new(None),
@@ -2509,6 +2517,7 @@ async fn cancel_propagates_to_sampler_handle_so_no_further_emission() {
                 let _ = axum::serve(listener, app).await;
             });
             let cfg = xai_grok_sampler::SamplerConfig {
+                usage_observer: None,
                 provider_profile: xai_grok_sampling_types::ProviderProfile::Xai,
                 api_key: Some("test-key".to_string()),
                 base_url: format!("http://{addr}/v1"),
@@ -2600,6 +2609,7 @@ async fn cancel_propagates_to_sampler_handle_so_no_further_emission() {
                 )
                 .await;
             let actor = SessionActor {
+                usage_observer: None,
                 transient_retry_enabled: true,
                 transient_retries_prompt_total: std::cell::Cell::new(0),
                 transient_episode_start: std::cell::Cell::new(None),

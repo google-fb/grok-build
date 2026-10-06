@@ -48,6 +48,13 @@ pub trait ChatPersistence: Send + 'static {
 
     /// Persist the session billing ledger (`usage.json`).
     fn persist_usage(&mut self, ledger: &UsageLedger);
+
+    /// Ack only after the atomic usage checkpoint has been written.
+    fn persist_usage_and_ack(
+        &mut self,
+        ledger: &UsageLedger,
+        reply: oneshot::Sender<io::Result<()>>,
+    );
 }
 
 /// Outcome of a conversation image strip, as acknowledged by the actor.
@@ -99,6 +106,7 @@ pub struct MockChatPersistence {
     persistence_ack_tx:
         Option<mpsc::UnboundedSender<oneshot::Sender<Result<StrictAppendAck, StrictAppendError>>>>,
     persisted_working_directory_switches: Vec<ConversationItem>,
+    usage_ack_tx: Option<mpsc::UnboundedSender<oneshot::Sender<io::Result<()>>>>,
 }
 
 /// Receiver side of the mock. Held by the test to drain and inspect records.
@@ -120,6 +128,7 @@ impl MockChatPersistence {
                 fail_strip_writes: false,
                 persistence_ack_tx: None,
                 persisted_working_directory_switches: Vec::new(),
+                usage_ack_tx: None,
             },
             MockPersistenceReceiver {
                 rx,
@@ -130,6 +139,17 @@ impl MockChatPersistence {
 
     /// Create a mock whose strip rewrites fail at "disk": the ack carries
     /// an error, so callers must surface `StripOutcome::WriteFailed`.
+    pub fn new_with_manual_usage_ack() -> (
+        Self,
+        MockPersistenceReceiver,
+        mpsc::UnboundedReceiver<oneshot::Sender<io::Result<()>>>,
+    ) {
+        let (mut mock, receiver) = Self::new();
+        let (tx, ack_rx) = mpsc::unbounded_channel();
+        mock.usage_ack_tx = Some(tx);
+        (mock, receiver, ack_rx)
+    }
+
     pub fn new_failing_strip_writes() -> (Self, MockPersistenceReceiver) {
         let (mut mock, rx) = Self::new();
         mock.fail_strip_writes = true;
@@ -146,6 +166,7 @@ impl MockChatPersistence {
                 fail_strip_writes: false,
                 persistence_ack_tx: Some(persistence_ack_tx),
                 persisted_working_directory_switches: Vec::new(),
+                usage_ack_tx: None,
             },
             MockPersistenceReceiver {
                 rx,
@@ -256,6 +277,19 @@ impl ChatPersistence for MockChatPersistence {
     fn persist_usage(&mut self, ledger: &UsageLedger) {
         let _ = self.tx.send(PersistenceRecord::Usage(ledger.clone()));
     }
+
+    fn persist_usage_and_ack(
+        &mut self,
+        ledger: &UsageLedger,
+        reply: oneshot::Sender<io::Result<()>>,
+    ) {
+        self.persist_usage(ledger);
+        if let Some(tx) = &self.usage_ack_tx {
+            let _ = tx.send(reply);
+        } else {
+            let _ = reply.send(Ok(()));
+        }
+    }
 }
 
 // ============================================================================
@@ -286,6 +320,17 @@ impl ChatPersistence for NullChatPersistence {
     }
     fn flush(&mut self) {}
     fn persist_usage(&mut self, _ledger: &UsageLedger) {}
+    fn persist_usage_and_ack(
+        &mut self,
+        _ledger: &UsageLedger,
+        reply: oneshot::Sender<io::Result<()>>,
+    ) {
+        // A null sink cannot promise durability to a transport observer.
+        let _ = reply.send(Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "usage persistence is disabled",
+        )));
+    }
 }
 
 #[cfg(test)]

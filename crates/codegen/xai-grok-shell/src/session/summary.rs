@@ -50,6 +50,13 @@ impl SummaryGenerator {
         }
     }
 
+    pub(crate) fn attach_usage_observer(&mut self, observer: xai_grok_usage::UsageObserver) {
+        self.config.sampling_client =
+            self.config.sampling_client.clone().with_usage_observer(
+                observer.for_purpose(xai_grok_usage::CallPurpose::SessionSummary),
+            );
+    }
+
     /// Generate a session summary from the first content chunk.
     ///
     /// - **Idle**: checks disk for an existing summary, spawns a background

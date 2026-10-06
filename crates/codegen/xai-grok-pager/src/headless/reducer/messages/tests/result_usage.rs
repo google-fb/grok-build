@@ -432,6 +432,7 @@ fn to_line_degrades_failing_serialize_to_error_line() {
 #[test]
 fn a4_non_finite_cost_serializes_to_null_result_frame() {
     let line = to_line(&MessagesLine::Result(Box::new(ResultLine {
+        session_requests: None,
         subtype: "success",
         is_error: false,
         duration_ms: 0,
@@ -605,4 +606,33 @@ fn messages_late_orphaned_completion_does_not_inflate_num_turns() {
         result["num_turns"], 1,
         "orphaned late completion must not add a turn: {result:?}"
     );
+}
+
+#[test]
+fn request_ledger_survives_incomplete_empty_legacy_usage() {
+    let mut reducer = messages(false);
+    let aggregate = json!({"usageIsIncomplete":true,
+        "sessionRequests":{"schema_version":1,"history_complete":false,"recording_errors":1,"calls":[],
+            "summary":{"untrusted":"must-be-recomputed"}}});
+    let out = reducer.finish(&TurnEnd {
+        stop_reason: "end_turn",
+        session_id: "sess",
+        request_id: "req",
+        usage: Some(&aggregate),
+        structured_output: None,
+        result_text: "",
+        duration_ms: 0,
+    });
+    let result = out.last().unwrap();
+    let requests = &result["session_requests"];
+    assert_eq!(requests["schema_version"], 1);
+    assert_eq!(requests["recording_errors"], 1);
+    assert!(
+        requests["summary"]["all"]["usage_is_incomplete"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(requests["summary"]["all"]["cost"]["total_usd"], json!(null));
+    assert!(requests["summary"].get("untrusted").is_none());
+    assert_eq!(result["total_cost_usd"], json!(null));
 }

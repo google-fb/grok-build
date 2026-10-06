@@ -23,6 +23,7 @@ pub(crate) fn ctx_with_toggle(toggle: HashMap<String, bool>) -> SubagentSpawnCon
         parent_max_turns: None,
         client_hooks: Default::default(),
         sampling_config: xai_grok_sampler::SamplerConfig {
+            usage_observer: None,
             provider_profile: xai_grok_sampling_types::ProviderProfile::Xai,
             api_key: None,
             base_url: String::new(),
@@ -126,6 +127,7 @@ pub(crate) fn ctx_with_toggle(toggle: HashMap<String, bool>) -> SubagentSpawnCon
             crate::auth::GrokComConfig::default(),
         )),
         attribution_callback: None,
+        usage_observer: None,
         parent_agent_name: None,
         parent_model_agent_type: None,
         allowed_subagent_types: None,

@@ -782,6 +782,7 @@ impl SessionActor {
             // `None` for sessions spawned without an `AuthManager` (BYOK direct,
             // certain test fixtures).
             attribution_callback: self.attribution_callback.clone(),
+            usage_observer: self.usage_observer.clone(),
             // Per-request bearer override is only valid for session-token auth.
             // Explicit API-key/env-key models must keep their configured bearer
             // and must not be overwritten by the interactive session token.
@@ -989,6 +990,10 @@ impl SessionActor {
             creds.alpha_test_key.clone(),
             creds.client_version.clone(),
         )
+        .map(|mut config| {
+            config.usage_observer = self.usage_observer.clone();
+            config
+        })
     }
 
     /// Resolve a dedicated sampler for the Auto-mode classifier model `slug`,
@@ -1049,6 +1054,10 @@ impl SessionActor {
     pub(crate) async fn prepare_sampler_for_turn(&self) {
         self.refresh_token_if_expired().await;
         let mut sampler_config = self.reconstruct_full_config().await;
+        sampler_config.usage_observer = self
+            .usage_observer
+            .as_ref()
+            .map(|observer| observer.for_purpose(xai_grok_usage::CallPurpose::MainLoop));
         if self.tool_context.task_output_token_budget.is_some()
             || self.tool_context.sampler_retry_only_before_output
         {

@@ -488,6 +488,10 @@ pub(crate) async fn spawn_session_actor(
     } else {
         crate::util::config::resolve_web_search_domains_from_disk()
     };
+    let web_search_provider_profile = web_search_sampling_config
+        .as_ref()
+        .map(|cfg| cfg.provider_profile)
+        .unwrap_or_default();
     let web_search_config = if disable_web_search {
         xai_grok_tools::implementations::WebSearchConfig::Disabled
     } else if let Some(cfg) = web_search_sampling_config {
@@ -515,6 +519,7 @@ pub(crate) async fn spawn_session_actor(
     };
     let embed_base_url = sampling_config.base_url.clone();
     let embed_api_key = sampling_config.api_key.clone();
+    let embedding_provider_profile = sampling_config.provider_profile;
     let session_pruning_config: crate::config::PruningConfig = memory_config.as_ref().map_or_else(
         || crate::config::PruningConfig {
             enabled: false,
@@ -561,6 +566,7 @@ pub(crate) async fn spawn_session_actor(
         soft_trim_tail: session_pruning_config.soft_trim_tail,
         hard_clear_age_turns: session_pruning_config.hard_clear_age_turns,
     };
+    let mut sampling_config = sampling_config;
     let (chat_state_event_tx, chat_state_event_rx) = mpsc::unbounded_channel();
     let chat_state_handle = xai_chat_state::ChatStateActor::spawn_with_session_usage(
         conversation.clone(),
@@ -573,6 +579,19 @@ pub(crate) async fn spawn_session_actor(
         tokio_util::sync::CancellationToken::new(),
         persisted_usage.unwrap_or_default(),
     );
+    let current_prompt_id = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let prompt_pin = current_prompt_id.clone();
+    let mut usage_observer = chat_state_handle.usage_observer(
+        session_info.id.0.to_string(),
+        std::sync::Arc::new(move || prompt_pin.lock().ok().and_then(|pin| pin.clone())),
+    );
+    if let Some(parent) = sampling_config.usage_observer.as_ref() {
+        usage_observer = usage_observer.with_parent(parent);
+    }
+    let _ = persistence.tx.send(
+        crate::session::persistence::PersistenceMsg::AttachUsageObserver(usage_observer.clone()),
+    );
+    sampling_config.usage_observer = Some(usage_observer.clone());
     if (!initial_prompt_texts.is_empty()
         || initial_total_tokens > 0
         || initial_last_compaction.is_some())
@@ -853,6 +872,8 @@ pub(crate) async fn spawn_session_actor(
             embed_config: memory_config.as_ref().map(|mc| mc.embedding.clone()),
             embed_base_url: embed_base_url.clone(),
             embed_api_key: embed_api_key.clone(),
+            usage_observer: Some(usage_observer.clone()),
+            provider_profile: embedding_provider_profile,
             search_config: memory_config
                 .as_ref()
                 .map_or_else(Default::default, |mc| mc.search.clone()),
@@ -1001,6 +1022,8 @@ pub(crate) async fn spawn_session_actor(
         plugin_registry: plugin_registry.clone(),
         api_key_provider: api_key_provider.clone(),
         attribution_callback: attribution_callback_for_spec,
+        usage_observer: Some(usage_observer.clone()),
+        web_search_provider_profile,
         tool_params_json: tool_params_json.clone(),
         subagent_event_tx: tool_context.subagent_event_tx.clone(),
         subagent_coordinator_sender: tool_context.subagent_coordinator_sender.clone(),
@@ -1274,13 +1297,15 @@ pub(crate) async fn spawn_session_actor(
     .ok()
     .map(|p| p.to_string_lossy().to_string())
     .unwrap_or_else(|| session_info.cwd.clone());
-    let current_prompt_id = std::sync::Arc::new(std::sync::Mutex::new(None));
+
     let pending_interactions: crate::session::pending_interaction::PendingInteractions =
         std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
     let permissions_for_handle = permissions.clone();
     let (event_tx, event_rx) = mpsc::unbounded_channel::<SessionEvent>();
     let mut sampler_config_initial = sampling_config.clone();
     sampler_config_initial.idle_timeout_secs = Some(inference_idle_timeout_secs);
+    sampler_config_initial.usage_observer =
+        Some(usage_observer.for_purpose(xai_grok_usage::CallPurpose::MainLoop));
     let task_output_budgeted = tool_context.task_output_token_budget.is_some();
     let retry_only_before_output =
         task_output_budgeted || tool_context.sampler_retry_only_before_output;
@@ -1841,6 +1866,7 @@ pub(crate) async fn spawn_session_actor(
         pending_image_strip: parking_lot::Mutex::new(std::collections::HashMap::new()),
         image_strip_rewrite_barrier: ImageStripRewriteBarrier::new(),
         sampler_handle,
+        usage_observer: Some(usage_observer.clone()),
         sampling_gate,
         rebuild_spec: rebuild_spec.clone(),
         image_description_model,
@@ -1968,6 +1994,7 @@ pub(crate) async fn spawn_session_actor(
         let sampling_base_url = embed_base_url.clone();
         let sampling_api_key = embed_api_key.clone();
         let session_id_for_reindex = session_info.id.to_string();
+        let embedding_usage_observer = usage_observer.clone();
         let chunks_added_counter = session.memory.chunks_added.clone();
         tokio::task::spawn_local(async move {
             let db_path = storage.workspace_dir().join("index.sqlite");
@@ -2000,6 +2027,12 @@ pub(crate) async fn spawn_session_actor(
                             sampling_base_url,
                             api_key,
                         )
+                        .map(|provider| {
+                            provider.with_usage_observer(
+                                Some(embedding_usage_observer.clone()),
+                                embedding_provider_profile,
+                            )
+                        })
                     {
                         crate::session::memory::embed_missing_chunks(&index, &provider).await
                     } else {
@@ -2201,6 +2234,7 @@ pub(crate) async fn spawn_session_actor(
             force_compact,
             permission_handle: permissions_for_handle,
             attribution_callback: attribution_callback_for_handle,
+            usage_observer: Some(usage_observer.clone()),
             agent_name: agent_name_for_handle,
             managed_mcp_proxy_base_url,
             session_default_agent_profile,

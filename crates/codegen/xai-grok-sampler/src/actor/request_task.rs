@@ -457,6 +457,7 @@ async fn apply_retry_decision(
                 | SamplingError::StreamError { .. }
                 | SamplingError::Auth { .. }
                 | SamplingError::InvalidConfiguration(_)
+                | SamplingError::UsageCheckpoint
                 | SamplingError::Http(_)
                 | SamplingError::Serialization(_)
                 | SamplingError::EventStreamError(_)

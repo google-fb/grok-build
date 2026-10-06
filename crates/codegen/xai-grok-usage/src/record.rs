@@ -10,6 +10,7 @@ pub enum CallBackend {
     Messages,
     Embeddings,
     Images,
+    Videos,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +32,7 @@ pub enum CallPurpose {
     Embedding,
     ImageGeneration,
     ImageEdit,
+    VideoGeneration,
 }
 
 impl CallPurpose {
@@ -117,7 +119,7 @@ impl ReportedUsage {
                 "/prompt_tokens_details/cache_write_tokens",
                 "/completion_tokens_details/reasoning_tokens",
             ),
-            CallBackend::Images => (
+            CallBackend::Images | CallBackend::Videos => (
                 "/input_tokens",
                 "/output_tokens",
                 "/input_tokens_details/cached_tokens",

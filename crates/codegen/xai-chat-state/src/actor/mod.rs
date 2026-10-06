@@ -204,6 +204,28 @@ impl ChatStateActor {
             ChatStateCommand::RecordLastTurnUsage { usage } => {
                 self.record_last_turn_usage(usage);
             }
+            ChatStateCommand::RecordRequestUsage { record, reply } => {
+                self.state
+                    .session_usage
+                    .request_usage
+                    .get_or_insert_with(|| xai_grok_usage::CallLedger::new(false))
+                    .upsert(record);
+                if let Some(reply) = reply {
+                    self.persistence
+                        .persist_usage_and_ack(&self.state.session_usage, reply);
+                } else {
+                    self.persistence.persist_usage(&self.state.session_usage);
+                }
+            }
+            ChatStateCommand::MarkRequestRecordingFailure => {
+                let ledger = self
+                    .state
+                    .session_usage
+                    .request_usage
+                    .get_or_insert_with(|| xai_grok_usage::CallLedger::new(false));
+                ledger.recording_errors = ledger.recording_errors.saturating_add(1);
+                self.persistence.persist_usage(&self.state.session_usage);
+            }
             ChatStateCommand::RecordModelCallUsage {
                 provider_cost,
                 model_id,

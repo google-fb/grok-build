@@ -318,6 +318,9 @@ impl MvpAgent {
             workspace_ops: parent_workspace_ops.clone(),
             auth_manager: am.clone(),
             attribution_callback: parent_attribution_callback,
+            usage_observer: parent_handle
+                .as_ref()
+                .and_then(|parent| parent.usage_observer.clone()),
             parent_agent_name,
             parent_model_agent_type,
             allowed_subagent_types: parent_handle

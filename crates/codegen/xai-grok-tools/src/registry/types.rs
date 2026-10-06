@@ -307,6 +307,8 @@ pub struct SessionContext {
     /// wire this to the same attribution sink used for inference-side
     /// 401s so tool and chat auth failures share one telemetry path.
     pub attribution_callback: Option<crate::SharedAttributionCallback>,
+    pub usage_observer: Option<xai_grok_usage::UsageObserver>,
+    pub web_search_provider_profile: xai_grok_usage::ProviderProfile,
     /// Tag name for `<system-reminder>` wrappers in tool result text.
     /// Defaults to [`crate::reminders::DEFAULT_REMINDER_TAG`] (hyphen).
     /// Hosts that expect a different tag name may override this.
@@ -1040,7 +1042,10 @@ impl ToolRegistryBuilder {
             &ctx.web_search_config,
             ctx.api_key_provider.clone(),
         ) {
-            let client = client.with_attribution_callback(ctx.attribution_callback.clone());
+            let client = client
+                .with_attribution_callback(ctx.attribution_callback.clone())
+                .with_usage_observer(ctx.usage_observer.clone())
+                .with_provider_profile(ctx.web_search_provider_profile);
             resources.insert(client);
         }
         if let Some(lsp) = ctx.lsp {
@@ -1054,8 +1059,9 @@ impl ToolRegistryBuilder {
                 ctx.api_key_provider.clone(),
             ) {
                 Ok(client) => {
-                    let mut client =
-                        client.with_attribution_callback(ctx.attribution_callback.clone());
+                    let mut client = client
+                        .with_attribution_callback(ctx.attribution_callback.clone())
+                        .with_usage_observer(ctx.usage_observer.clone());
                     if let Some(session_id) = &ctx.owner_session_id {
                         client = client.with_session_id(session_id);
                     }
@@ -1072,8 +1078,9 @@ impl ToolRegistryBuilder {
                 ctx.api_key_provider.clone(),
             ) {
                 Ok(client) => {
-                    let mut client =
-                        client.with_attribution_callback(ctx.attribution_callback.clone());
+                    let mut client = client
+                        .with_attribution_callback(ctx.attribution_callback.clone())
+                        .with_usage_observer(ctx.usage_observer.clone());
                     if let Some(session_id) = &ctx.owner_session_id {
                         client = client.with_session_id(session_id);
                     }
@@ -2236,6 +2243,8 @@ mod tests {
             api_key_provider: None,
             auth_provider: None,
             attribution_callback: None,
+            usage_observer: None,
+            web_search_provider_profile: Default::default(),
             system_reminder_tag: crate::reminders::DEFAULT_REMINDER_TAG,
         }
     }

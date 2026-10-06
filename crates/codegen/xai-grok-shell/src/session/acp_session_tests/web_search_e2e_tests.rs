@@ -87,6 +87,8 @@ async fn web_search_uses_model_override_from_config_end_to_end() {
     let terminal: std::sync::Arc<dyn TerminalBackend> =
         std::sync::Arc::new(LocalTerminalBackend::new());
     let ctx = SessionContext {
+        usage_observer: None,
+        web_search_provider_profile: Default::default(),
         backend: terminal,
         fs,
         cwd: std::env::temp_dir(),
@@ -169,6 +171,8 @@ async fn web_search_errors_when_configured_model_cannot_be_resolved() {
     let terminal: std::sync::Arc<dyn TerminalBackend> =
         std::sync::Arc::new(LocalTerminalBackend::new());
     let ctx = SessionContext {
+        usage_observer: None,
+        web_search_provider_profile: Default::default(),
         backend: terminal,
         fs,
         cwd: std::env::temp_dir(),

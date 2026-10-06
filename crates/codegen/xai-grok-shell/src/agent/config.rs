@@ -5229,6 +5229,7 @@ pub(crate) fn stamp_session_local_sampler_fields(
 ) {
     cfg.client_identifier = client_identifier;
     cfg.attribution_callback = active_session_config.attribution_callback.clone();
+    cfg.usage_observer = active_session_config.usage_observer.clone();
     if crate::util::is_xai_api_bearer_url(&cfg.base_url) {
         cfg.bearer_resolver = active_session_config.bearer_resolver.clone();
     }
@@ -5323,6 +5324,7 @@ pub(crate) fn sampling_config_for_model(
         &credentials.base_url,
     );
     SamplerConfig {
+        usage_observer: None,
         provider_profile,
         api_key: credentials.api_key,
         model: model_name,

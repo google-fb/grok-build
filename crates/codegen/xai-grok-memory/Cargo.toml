@@ -10,6 +10,7 @@ edition.workspace = true
 test-support = []
 
 [dependencies]
+xai-grok-usage = { path = "../xai-grok-usage" }
 anyhow = { workspace = true }
 arc-swap = { workspace = true }
 async-trait = { workspace = true }

@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 
 use super::*;
 
-use crate::extensions::notification::{PromptUsage, PromptUsageModel, ticks_to_usd};
+use crate::extensions::notification::{PromptUsage, PromptUsageModel};
 use xai_grok_status_line::{
     STATUS_LINE_SCHEMA_VERSION, StatusLineContext, StatusLineContextWindow, StatusLineCost,
     StatusLineEffort, StatusLineModel, StatusLineRepo, StatusLineSessionUsage, StatusLineTurn,
@@ -207,7 +207,7 @@ impl SessionActor {
             },
             version: xai_grok_version::VERSION.to_string(),
             cost: StatusLineCost {
-                total_cost_usd: totals.and_then(|t| t.cost_usd_ticks).map(ticks_to_usd),
+                total_cost_usd: totals.and_then(crate::extensions::notification::reported_cost_usd),
                 total_duration_ms: self.session_start.elapsed().as_millis() as u64,
                 total_api_duration_ms: totals.map(|t| t.api_duration_ms),
             },

@@ -107,6 +107,8 @@ async fn test_agent_from_config(
     let builder = crate::tools::bridge::ToolBridge::get_builder();
     let fs: std::sync::Arc<dyn AsyncFileSystem> = std::sync::Arc::new(LocalFs);
     let ctx = SessionContext {
+        usage_observer: None,
+        web_search_provider_profile: Default::default(),
         backend,
         fs,
         cwd: std::path::PathBuf::from("/tmp"),
@@ -250,6 +252,7 @@ pub(crate) async fn create_test_actor_with_terminal(
     );
     chat_state_handle.record_token_usage(total_tokens);
     let actor = SessionActor {
+        usage_observer: None,
         transient_retry_enabled: true,
         transient_retries_prompt_total: std::cell::Cell::new(0),
         transient_episode_start: std::cell::Cell::new(None),

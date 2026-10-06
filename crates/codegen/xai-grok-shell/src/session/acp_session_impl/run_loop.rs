@@ -1278,6 +1278,7 @@ pub(super) async fn run_session(
                                     }
                                 }
                             };
+                            let usage = session.attach_session_requests(usage).await;
                             let _ = respond_to.send(usage);
                         }
                         SessionCommand::SetNextTraceTurn {

@@ -109,6 +109,10 @@ pub struct SamplerConfig {
     #[serde(skip)]
     pub attribution_callback: Option<SharedAttributionCallback>,
 
+    /// Session-local, content-free request accounting. Reattach after deserialization.
+    #[serde(skip)]
+    pub usage_observer: Option<xai_grok_usage::UsageObserver>,
+
     /// Live bearer resolve per request. `None` uses construction-time `api_key`.
     #[serde(skip)]
     pub bearer_resolver: Option<SharedBearerResolver>,
@@ -167,6 +171,7 @@ impl Default for SamplerConfig {
             user_id: None,
             client_version: None,
             attribution_callback: None,
+            usage_observer: None,
             bearer_resolver: None,
             supports_backend_search: false,
             compactions_remaining: None,

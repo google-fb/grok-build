@@ -377,11 +377,18 @@ impl xai_tool_runtime::Tool for ImageEditTool {
         let sent_bearer = client.current_bearer().await;
         let req = client.post_json(&url, &payload, sent_bearer.as_deref());
 
-        let response = req.send().await.map_err(|e| {
-            xai_tool_runtime::ToolError::invalid_arguments(format!(
-                "Image edit API request failed: {e}"
-            ))
-        })?;
+        let response = client
+            .send_observed(
+                req,
+                client.edit_model(),
+                xai_grok_usage::CallPurpose::ImageEdit,
+            )
+            .await
+            .map_err(|e| {
+                xai_tool_runtime::ToolError::invalid_arguments(format!(
+                    "Image edit API request failed: {e}"
+                ))
+            })?;
 
         let status = response.status();
         if status == reqwest::StatusCode::UNAUTHORIZED {

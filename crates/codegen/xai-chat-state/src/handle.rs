@@ -22,6 +22,20 @@ pub struct ChatStateHandle {
 }
 
 impl ChatStateHandle {
+    /// Weak sink: observers in background/persistence tasks must not keep the
+    /// chat-state actor (and its persistence channel) alive indefinitely.
+    pub fn usage_observer(
+        &self,
+        session_id: String,
+        prompt_id: std::sync::Arc<dyn Fn() -> Option<String> + Send + Sync>,
+    ) -> xai_grok_usage::UsageObserver {
+        xai_grok_usage::UsageObserver::new(
+            std::sync::Arc::new(ActorUsageSink(self.cmd_tx.downgrade())),
+            session_id,
+            prompt_id,
+        )
+    }
+
     /// Create a new handle with the given command sender.
     pub(crate) fn new(cmd_tx: mpsc::UnboundedSender<ChatStateCommand>) -> Self {
         Self { cmd_tx }
@@ -725,5 +739,40 @@ mod tests {
         let handle = ChatStateHandle::noop();
         let clone = handle.clone();
         clone.push_user_message(ConversationItem::user("from clone"));
+    }
+}
+
+struct ActorUsageSink(mpsc::WeakUnboundedSender<ChatStateCommand>);
+impl xai_grok_usage::UsageSink for ActorUsageSink {
+    fn record(&self, record: xai_grok_usage::CallRecord) -> xai_grok_usage::RecordFuture {
+        let (reply, ack) = oneshot::channel();
+        let sent = self.0.upgrade().is_some_and(|tx| {
+            tx.send(ChatStateCommand::RecordRequestUsage {
+                record,
+                reply: Some(reply),
+            })
+            .is_ok()
+        });
+        Box::pin(async move {
+            if !sent {
+                return Err(xai_grok_usage::RecordError);
+            }
+            ack.await
+                .map_err(|_| xai_grok_usage::RecordError)?
+                .map_err(|_| xai_grok_usage::RecordError)
+        })
+    }
+    fn record_detached(&self, record: xai_grok_usage::CallRecord) {
+        if let Some(tx) = self.0.upgrade() {
+            let _ = tx.send(ChatStateCommand::RecordRequestUsage {
+                record,
+                reply: None,
+            });
+        }
+    }
+    fn report_failure(&self) {
+        if let Some(tx) = self.0.upgrade() {
+            let _ = tx.send(ChatStateCommand::MarkRequestRecordingFailure);
+        }
     }
 }

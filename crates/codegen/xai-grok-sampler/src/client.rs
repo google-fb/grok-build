@@ -12,6 +12,7 @@
 //! headers (proxy auth, OTel context, etc.)
 //! into [`SamplerConfig::extra_headers`] before constructing the client.
 
+use crate::usage_observation::{finish_request, observe_body, observe_stream};
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
@@ -20,6 +21,7 @@ use reqwest::header::{
     ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, USER_AGENT,
 };
 use serde::Serialize;
+use xai_grok_usage::{CallBackend, CallGuard, UsageObserver};
 
 use xai_grok_sampling_types::error::{
     parse_error_code, try_parse_stream_error, user_facing_api_error_message,
@@ -373,6 +375,7 @@ pub struct SamplingClient {
     /// bucketed by stale-snapshot vs. live-token-rejected. `None` for
     /// sampler-only callers and tests.
     attribution_callback: Option<crate::attribution::SharedAttributionCallback>,
+    usage_observer: Option<UsageObserver>,
     /// Per-request bearer override. See `SamplerConfig::bearer_resolver`.
     bearer_resolver: Option<crate::config::SharedBearerResolver>,
     /// Per-request header injection (OTel traceparent).
@@ -728,10 +731,35 @@ impl SamplingClient {
             base_url: config.base_url,
             defaults,
             attribution_callback: config.attribution_callback,
+            usage_observer: config.usage_observer,
             bearer_resolver: config.bearer_resolver,
             header_injector: config.header_injector,
             endpoint,
         })
+    }
+
+    /// Attach a session-local observer without rebuilding the transport.
+    pub fn with_usage_observer(mut self, observer: UsageObserver) -> Self {
+        self.usage_observer = Some(observer);
+        self
+    }
+
+    pub fn with_usage_purpose(mut self, purpose: xai_grok_usage::CallPurpose) -> Self {
+        self.usage_observer = self
+            .usage_observer
+            .map(|observer| observer.for_purpose(purpose));
+        self
+    }
+
+    async fn start_usage(&self, model: &str, backend: CallBackend) -> Result<CallGuard> {
+        CallGuard::start(
+            self.usage_observer.as_ref(),
+            model,
+            self.defaults.provider_profile,
+            backend,
+        )
+        .await
+        .map_err(|_| SamplingError::UsageCheckpoint)
     }
 
     /// The configured API backend for this client.
@@ -930,12 +958,14 @@ impl SamplingClient {
         &self,
         response: reqwest::Response,
         sent_bearer: Option<&str>,
+        call: &mut CallGuard,
     ) -> Result<ChatCompletionResponse> {
         let status = response.status();
         let model_metadata = extract_model_metadata(response.headers());
         let retry_after_secs = extract_retry_after(response.headers());
         let should_retry = extract_should_retry(response.headers());
         let bytes = response.bytes().await?;
+        observe_body(call, &bytes).await?;
 
         if !status.is_success() {
             if status == reqwest::StatusCode::UNAUTHORIZED {
@@ -1010,13 +1040,26 @@ impl SamplingClient {
             .apply(builder, self.defaults.provider_profile.xai_extensions())
             .json(&payload);
 
-        let response = http_request.send().await.map_err(|e| {
-            // Log at debug level; errors are surfaced to the caller.
-            tracing::debug!("HTTP request failed: {}", e);
-            e
-        })?;
+        let mut call = Some(
+            self.start_usage(&model_id, CallBackend::ChatCompletions)
+                .await?,
+        );
+        let result = async {
+            let response = http_request.send().await.map_err(|e| {
+                // Log at debug level; errors are surfaced to the caller.
+                tracing::debug!("HTTP request failed: {}", e);
+                e
+            })?;
 
-        self.handle_response(response, sent_bearer.as_deref()).await
+            self.handle_response(
+                response,
+                sent_bearer.as_deref(),
+                call.as_mut().expect("request guard"),
+            )
+            .await
+        }
+        .await;
+        finish_request(call, result).await
     }
 
     /// Start a streaming chat completion request. Returns a stream of typed chunks.
@@ -1086,122 +1129,134 @@ impl SamplingClient {
         );
         Self::log_request_headers(&built_request, "chat/completions");
 
-        let response = self.http.execute(built_request).await.map_err(|e| {
-            tracing::debug!("HTTP request failed: {}", e);
-            record_stream_request_failure(&e);
-            e
-        })?;
+        let mut call = Some(
+            self.start_usage(&model_id, CallBackend::ChatCompletions)
+                .await?,
+        );
+        let result = async {
+            let response = self.http.execute(built_request).await.map_err(|e| {
+                tracing::debug!("HTTP request failed: {}", e);
+                record_stream_request_failure(&e);
+                e
+            })?;
 
-        let status = response.status();
-        let span = tracing::Span::current();
-        span.record("status_code", status.as_u16() as i64);
-        span.record("success", status.is_success());
-        let model_metadata = extract_model_metadata(response.headers());
-        let retry_after_secs = extract_retry_after(response.headers());
-        let should_retry = extract_should_retry(response.headers());
-        if !status.is_success() {
-            if status == reqwest::StatusCode::UNAUTHORIZED {
-                span.record("error", "unauthorized (401)");
-                self.record_401_attribution(
-                    crate::attribution::SamplingConsumer::ChatCompletionsStream,
-                    sent_bearer.as_deref(),
+            let status = response.status();
+            let span = tracing::Span::current();
+            span.record("status_code", status.as_u16() as i64);
+            span.record("success", status.is_success());
+            let model_metadata = extract_model_metadata(response.headers());
+            let retry_after_secs = extract_retry_after(response.headers());
+            let should_retry = extract_should_retry(response.headers());
+            if !status.is_success() {
+                if status == reqwest::StatusCode::UNAUTHORIZED {
+                    span.record("error", "unauthorized (401)");
+                    self.record_401_attribution(
+                        crate::attribution::SamplingConsumer::ChatCompletionsStream,
+                        sent_bearer.as_deref(),
+                    );
+                    let endpoint = self.endpoint("chat/completions");
+                    let body = response.bytes().await.unwrap_or_default();
+                    let server_message = user_facing_api_error_message(status, body.as_ref());
+                    return Err(auth_rejected(
+                        format!("Unauthorized (401) from {endpoint}: {server_message}"),
+                        sent_bearer.as_deref(),
+                    ));
+                }
+
+                let bytes = response.bytes().await?;
+                let message = user_facing_api_error_message(status, bytes.as_ref());
+                span.record("error", message.as_str());
+                tracing::error!(
+                    status = %status,
+                    error_message = %message,
+                    body_preview = %Self::body_preview(bytes.as_ref()),
+                    model_id = %model_id,
+                    "chat/completions API error"
                 );
-                let endpoint = self.endpoint("chat/completions");
-                let body = response.bytes().await.unwrap_or_default();
-                let server_message = user_facing_api_error_message(status, body.as_ref());
-                return Err(auth_rejected(
-                    format!("Unauthorized (401) from {endpoint}: {server_message}"),
-                    sent_bearer.as_deref(),
-                ));
+                return Err(SamplingError::Api {
+                    status,
+                    message,
+                    model_metadata,
+                    retry_after_secs,
+                    should_retry,
+                    error_code: parse_error_code(bytes.as_ref()),
+                });
             }
 
-            let bytes = response.bytes().await?;
-            let message = user_facing_api_error_message(status, bytes.as_ref());
-            span.record("error", message.as_str());
-            tracing::error!(
-                status = %status,
-                error_message = %message,
-                body_preview = %Self::body_preview(bytes.as_ref()),
-                model_id = %model_id,
-                "chat/completions API error"
-            );
-            return Err(SamplingError::Api {
-                status,
-                message,
-                model_metadata,
-                retry_after_secs,
-                should_retry,
-                error_code: parse_error_code(bytes.as_ref()),
+            // Strip UTF-8 BOM if present: eventsource-stream 0.2.3 incorrectly slices BOM at byte 1 instead of 3.
+            const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
+            let mut is_first = true;
+            let byte_stream = response.bytes_stream().map(move |result| {
+                result.map(|bytes| {
+                    if is_first {
+                        is_first = false;
+                        if bytes.starts_with(UTF8_BOM) {
+                            return bytes.slice(UTF8_BOM.len()..);
+                        }
+                    }
+                    bytes
+                })
             });
+
+            // Turn raw bytes into SSE events
+            let event_stream = observe_stream(
+                byte_stream.eventsource(),
+                call.take().expect("request guard"),
+                CallBackend::ChatCompletions,
+            );
+
+            // Map SSE events into ChatCompletionChunk.
+            // Uses `scan` so that `[DONE]` and transport errors both terminate the
+            // stream (`None`). The first transport error is emitted to the consumer,
+            // then subsequent polls return `None` -- preventing an infinite busy-loop
+            // when the HTTP/2 connection drops and h2 keeps producing errors.
+            let chunks = event_stream
+                .scan(false, |had_transport_error, event_res| {
+                    if *had_transport_error {
+                        return std::future::ready(None);
+                    }
+                    let item = match event_res {
+                        Ok(event) => {
+                            let data = &event.data;
+                            if data == "[DONE]" {
+                                return std::future::ready(None);
+                            }
+
+                            tracing::info!(
+                                target: crate::sampling_log::TARGET,
+                                event = "sse_chunk",
+                                backend = "chat_completions",
+                                data = %data,
+                            );
+
+                            if let Some(stream_error) = try_parse_stream_error(data) {
+                                Some(Err(stream_error))
+                            } else {
+                                Some(serde_json::from_str::<ChatCompletionChunk>(data).map_err(
+                                    |e| {
+                                        tracing::error!(
+                                            error = %e,
+                                            raw_data = %data,
+                                            "Failed to deserialize ChatCompletionChunk from stream"
+                                        );
+                                        SamplingError::Serialization(e)
+                                    },
+                                ))
+                            }
+                        }
+                        Err(e) => {
+                            *had_transport_error = true;
+                            Some(Err(e))
+                        }
+                    };
+                    std::future::ready(item)
+                })
+                .boxed();
+
+            Ok((chunks, model_metadata))
         }
-
-        // Strip UTF-8 BOM if present: eventsource-stream 0.2.3 incorrectly slices BOM at byte 1 instead of 3.
-        const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
-        let mut is_first = true;
-        let byte_stream = response.bytes_stream().map(move |result| {
-            result.map(|bytes| {
-                if is_first {
-                    is_first = false;
-                    if bytes.starts_with(UTF8_BOM) {
-                        return bytes.slice(UTF8_BOM.len()..);
-                    }
-                }
-                bytes
-            })
-        });
-
-        // Turn raw bytes into SSE events
-        let event_stream = byte_stream.eventsource();
-
-        // Map SSE events into ChatCompletionChunk.
-        // Uses `scan` so that `[DONE]` and transport errors both terminate the
-        // stream (`None`). The first transport error is emitted to the consumer,
-        // then subsequent polls return `None` -- preventing an infinite busy-loop
-        // when the HTTP/2 connection drops and h2 keeps producing errors.
-        let chunks = event_stream
-            .scan(false, |had_transport_error, event_res| {
-                if *had_transport_error {
-                    return std::future::ready(None);
-                }
-                let item = match event_res {
-                    Ok(event) => {
-                        let data = &event.data;
-                        if data == "[DONE]" {
-                            return std::future::ready(None);
-                        }
-
-                        tracing::info!(
-                            target: crate::sampling_log::TARGET,
-                            event = "sse_chunk",
-                            backend = "chat_completions",
-                            data = %data,
-                        );
-
-                        if let Some(stream_error) = try_parse_stream_error(data) {
-                            Some(Err(stream_error))
-                        } else {
-                            Some(
-                                serde_json::from_str::<ChatCompletionChunk>(data).map_err(|e| {
-                                    tracing::error!(
-                                        error = %e,
-                                        raw_data = %data,
-                                        "Failed to deserialize ChatCompletionChunk from stream"
-                                    );
-                                    SamplingError::Serialization(e)
-                                }),
-                            )
-                        }
-                    }
-                    Err(e) => {
-                        *had_transport_error = true;
-                        Some(Err(SamplingError::EventStreamError(e.to_string())))
-                    }
-                };
-                std::future::ready(item)
-            })
-            .boxed();
-
-        Ok((chunks, model_metadata))
+        .await;
+        finish_request(call, result).await
     }
 
     // =========================================================================
@@ -1297,59 +1352,65 @@ impl SamplingClient {
             .apply(builder, self.defaults.provider_profile.xai_extensions())
             .json(&request_body);
 
-        let response = http_request.send().await.map_err(|e| {
-            tracing::debug!("HTTP request failed: {}", e);
-            e
-        })?;
+        let mut call = Some(self.start_usage(&model_id, CallBackend::Responses).await?);
+        let result = async {
+            let response = http_request.send().await.map_err(|e| {
+                tracing::debug!("HTTP request failed: {}", e);
+                e
+            })?;
 
-        let status = response.status();
-        let model_metadata = extract_model_metadata(response.headers());
-        let retry_after_secs = extract_retry_after(response.headers());
-        let should_retry = extract_should_retry(response.headers());
-        let bytes = response.bytes().await?;
+            let status = response.status();
+            let model_metadata = extract_model_metadata(response.headers());
+            let retry_after_secs = extract_retry_after(response.headers());
+            let should_retry = extract_should_retry(response.headers());
+            let bytes = response.bytes().await?;
+            observe_body(call.as_mut().expect("request guard"), &bytes).await?;
 
-        if !status.is_success() {
-            if status == reqwest::StatusCode::UNAUTHORIZED {
-                self.record_401_attribution(
-                    crate::attribution::SamplingConsumer::Responses,
-                    sent_bearer.as_deref(),
+            if !status.is_success() {
+                if status == reqwest::StatusCode::UNAUTHORIZED {
+                    self.record_401_attribution(
+                        crate::attribution::SamplingConsumer::Responses,
+                        sent_bearer.as_deref(),
+                    );
+                    let endpoint = self.endpoint("responses");
+                    let server_message = user_facing_api_error_message(status, bytes.as_ref());
+                    return Err(auth_rejected(
+                        format!("Unauthorized (401) from {endpoint}: {server_message}"),
+                        sent_bearer.as_deref(),
+                    ));
+                }
+
+                let message = user_facing_api_error_message(status, bytes.as_ref());
+                tracing::warn!(
+                    status = %status,
+                    error_message = %message,
+                    body_preview = %Self::body_preview(bytes.as_ref()),
+                    model_id = %model_id,
+                    "responses API error"
                 );
-                let endpoint = self.endpoint("responses");
-                let server_message = user_facing_api_error_message(status, bytes.as_ref());
-                return Err(auth_rejected(
-                    format!("Unauthorized (401) from {endpoint}: {server_message}"),
-                    sent_bearer.as_deref(),
-                ));
+                return Err(SamplingError::Api {
+                    status,
+                    message,
+                    model_metadata,
+                    retry_after_secs,
+                    should_retry,
+                    error_code: parse_error_code(bytes.as_ref()),
+                });
             }
 
-            let message = user_facing_api_error_message(status, bytes.as_ref());
-            tracing::warn!(
-                status = %status,
-                error_message = %message,
-                body_preview = %Self::body_preview(bytes.as_ref()),
-                model_id = %model_id,
-                "responses API error"
-            );
-            return Err(SamplingError::Api {
-                status,
-                message,
-                model_metadata,
-                retry_after_secs,
-                should_retry,
-                error_code: parse_error_code(bytes.as_ref()),
-            });
+            let response_obj = serde_json::from_slice::<rs::Response>(&bytes).map_err(|e| {
+                let raw_body = String::from_utf8_lossy(&bytes);
+                tracing::error!(
+                    error = %e,
+                    raw_body = %raw_body,
+                    "Failed to deserialize rs::Response"
+                );
+                SamplingError::Serialization(e)
+            })?;
+            Ok(response_obj)
         }
-
-        let response_obj = serde_json::from_slice::<rs::Response>(&bytes).map_err(|e| {
-            let raw_body = String::from_utf8_lossy(&bytes);
-            tracing::error!(
-                error = %e,
-                raw_body = %raw_body,
-                "Failed to deserialize rs::Response"
-            );
-            SamplingError::Serialization(e)
-        })?;
-        Ok(response_obj)
+        .await;
+        finish_request(call, result).await
     }
 
     /// Create a streaming response using the Responses API.
@@ -1463,127 +1524,136 @@ impl SamplingClient {
         );
         Self::log_request_headers(&built_request, "responses");
 
-        let response = self.http.execute(built_request).await.map_err(|e| {
-            tracing::debug!("HTTP request failed: {}", e);
-            record_stream_request_failure(&e);
-            e
-        })?;
+        let mut call = Some(self.start_usage(&model_id, CallBackend::Responses).await?);
+        let result = async {
+            let response = self.http.execute(built_request).await.map_err(|e| {
+                tracing::debug!("HTTP request failed: {}", e);
+                record_stream_request_failure(&e);
+                e
+            })?;
 
-        let status = response.status();
-        let span = tracing::Span::current();
-        span.record("status_code", status.as_u16() as i64);
-        span.record("success", status.is_success());
-        if !status.is_success() {
-            if status == reqwest::StatusCode::UNAUTHORIZED {
-                span.record("error", "unauthorized (401)");
-                self.record_401_attribution(
-                    crate::attribution::SamplingConsumer::ResponsesStream,
-                    sent_bearer.as_deref(),
+            let status = response.status();
+            let span = tracing::Span::current();
+            span.record("status_code", status.as_u16() as i64);
+            span.record("success", status.is_success());
+            if !status.is_success() {
+                if status == reqwest::StatusCode::UNAUTHORIZED {
+                    span.record("error", "unauthorized (401)");
+                    self.record_401_attribution(
+                        crate::attribution::SamplingConsumer::ResponsesStream,
+                        sent_bearer.as_deref(),
+                    );
+                    let endpoint = self.endpoint("responses");
+                    let body = response.bytes().await.unwrap_or_default();
+                    let server_message = user_facing_api_error_message(status, body.as_ref());
+                    return Err(auth_rejected(
+                        format!("Unauthorized (401) from {endpoint}: {server_message}"),
+                        sent_bearer.as_deref(),
+                    ));
+                }
+                let model_metadata = extract_model_metadata(response.headers());
+                let retry_after_secs = extract_retry_after(response.headers());
+                let should_retry = extract_should_retry(response.headers());
+                let bytes = response.bytes().await?;
+                let message = user_facing_api_error_message(status, bytes.as_ref());
+                span.record("error", message.as_str());
+                tracing::error!(
+                    status = %status,
+                    error_message = %message,
+                    body_preview = %Self::body_preview(bytes.as_ref()),
+                    model_id = %model_id,
+                    "responses API error"
                 );
-                let endpoint = self.endpoint("responses");
-                let body = response.bytes().await.unwrap_or_default();
-                let server_message = user_facing_api_error_message(status, body.as_ref());
-                return Err(auth_rejected(
-                    format!("Unauthorized (401) from {endpoint}: {server_message}"),
-                    sent_bearer.as_deref(),
-                ));
+                return Err(SamplingError::Api {
+                    status,
+                    message,
+                    model_metadata,
+                    retry_after_secs,
+                    should_retry,
+                    error_code: parse_error_code(bytes.as_ref()),
+                });
             }
+
             let model_metadata = extract_model_metadata(response.headers());
-            let retry_after_secs = extract_retry_after(response.headers());
-            let should_retry = extract_should_retry(response.headers());
-            let bytes = response.bytes().await?;
-            let message = user_facing_api_error_message(status, bytes.as_ref());
-            span.record("error", message.as_str());
-            tracing::error!(
-                status = %status,
-                error_message = %message,
-                body_preview = %Self::body_preview(bytes.as_ref()),
-                model_id = %model_id,
-                "responses API error"
-            );
-            return Err(SamplingError::Api {
-                status,
-                message,
-                model_metadata,
-                retry_after_secs,
-                should_retry,
-                error_code: parse_error_code(bytes.as_ref()),
+
+            // Strip UTF-8 BOM if present
+            const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
+            let mut is_first = true;
+            let byte_stream = response.bytes_stream().map(move |result| {
+                result.map(|bytes| {
+                    if is_first {
+                        is_first = false;
+                        if bytes.starts_with(UTF8_BOM) {
+                            return bytes.slice(UTF8_BOM.len()..);
+                        }
+                    }
+                    bytes
+                })
             });
+
+            // Turn raw bytes into SSE events
+            let event_stream = observe_stream(
+                byte_stream.eventsource(),
+                call.take().expect("request guard"),
+                CallBackend::Responses,
+            );
+
+            let doom_loop_for_stream = doom_loop.clone();
+
+            // The scan item is an `Option`: `Some(None)` skips an absorbed
+            // doom-loop event without terminating the stream (`filter_map`
+            // below), while an outer `None` still ends it.
+            let events = event_stream
+                .scan(false, move |had_transport_error, event_res| {
+                    if *had_transport_error {
+                        return std::future::ready(None);
+                    }
+                    let item = match event_res {
+                        Ok(event) => {
+                            let data = &event.data;
+                            if data == "[DONE]" {
+                                return std::future::ready(None);
+                            }
+
+                            tracing::info!(
+                                target: crate::sampling_log::TARGET,
+                                event = "sse_chunk",
+                                backend = "responses",
+                                data = %data,
+                            );
+
+                            // Intercept the non-standard doom-loop event before
+                            // typed deserialization; async-openai's event enum
+                            // does not know it and would fail to parse it. With
+                            // the check disabled, the shared name-or-payload-type
+                            // predicate guards against a server emitting it
+                            // despite no opt-in (rollout skew), named or not.
+                            let swallow = match &doom_loop_for_stream {
+                                Some(collector) => collector.absorb(&event.event, data),
+                                None => is_check_event(&event.event, data),
+                            };
+                            if swallow {
+                                Some(None)
+                            } else if let Some(stream_error) = try_parse_stream_error(data) {
+                                Some(Some(Err(stream_error)))
+                            } else {
+                                Some(Some(deserialize_response_event(data)))
+                            }
+                        }
+                        Err(e) => {
+                            *had_transport_error = true;
+                            Some(Some(Err(e)))
+                        }
+                    };
+                    std::future::ready(item)
+                })
+                .filter_map(std::future::ready)
+                .boxed();
+
+            Ok((events, model_metadata, doom_loop))
         }
-
-        let model_metadata = extract_model_metadata(response.headers());
-
-        // Strip UTF-8 BOM if present
-        const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
-        let mut is_first = true;
-        let byte_stream = response.bytes_stream().map(move |result| {
-            result.map(|bytes| {
-                if is_first {
-                    is_first = false;
-                    if bytes.starts_with(UTF8_BOM) {
-                        return bytes.slice(UTF8_BOM.len()..);
-                    }
-                }
-                bytes
-            })
-        });
-
-        // Turn raw bytes into SSE events
-        let event_stream = byte_stream.eventsource();
-
-        let doom_loop_for_stream = doom_loop.clone();
-
-        // The scan item is an `Option`: `Some(None)` skips an absorbed
-        // doom-loop event without terminating the stream (`filter_map`
-        // below), while an outer `None` still ends it.
-        let events = event_stream
-            .scan(false, move |had_transport_error, event_res| {
-                if *had_transport_error {
-                    return std::future::ready(None);
-                }
-                let item = match event_res {
-                    Ok(event) => {
-                        let data = &event.data;
-                        if data == "[DONE]" {
-                            return std::future::ready(None);
-                        }
-
-                        tracing::info!(
-                            target: crate::sampling_log::TARGET,
-                            event = "sse_chunk",
-                            backend = "responses",
-                            data = %data,
-                        );
-
-                        // Intercept the non-standard doom-loop event before
-                        // typed deserialization; async-openai's event enum
-                        // does not know it and would fail to parse it. With
-                        // the check disabled, the shared name-or-payload-type
-                        // predicate guards against a server emitting it
-                        // despite no opt-in (rollout skew), named or not.
-                        let swallow = match &doom_loop_for_stream {
-                            Some(collector) => collector.absorb(&event.event, data),
-                            None => is_check_event(&event.event, data),
-                        };
-                        if swallow {
-                            Some(None)
-                        } else if let Some(stream_error) = try_parse_stream_error(data) {
-                            Some(Some(Err(stream_error)))
-                        } else {
-                            Some(Some(deserialize_response_event(data)))
-                        }
-                    }
-                    Err(e) => {
-                        *had_transport_error = true;
-                        Some(Some(Err(SamplingError::EventStreamError(e.to_string()))))
-                    }
-                };
-                std::future::ready(item)
-            })
-            .filter_map(std::future::ready)
-            .boxed();
-
-        Ok((events, model_metadata, doom_loop))
+        .await;
+        finish_request(call, result).await
     }
 
     // =========================================================================
@@ -1653,60 +1723,66 @@ impl SamplingClient {
             .apply(builder, self.defaults.provider_profile.xai_extensions())
             .json(&request.inner);
 
-        let response = http_request.send().await.map_err(|e| {
-            tracing::debug!("HTTP request failed: {}", e);
-            e
-        })?;
+        let mut call = Some(self.start_usage(&model_id, CallBackend::Messages).await?);
+        let result = async {
+            let response = http_request.send().await.map_err(|e| {
+                tracing::debug!("HTTP request failed: {}", e);
+                e
+            })?;
 
-        let status = response.status();
-        let model_metadata = extract_model_metadata(response.headers());
-        let retry_after_secs = extract_retry_after(response.headers());
-        let should_retry = extract_should_retry(response.headers());
-        let bytes = response.bytes().await?;
+            let status = response.status();
+            let model_metadata = extract_model_metadata(response.headers());
+            let retry_after_secs = extract_retry_after(response.headers());
+            let should_retry = extract_should_retry(response.headers());
+            let bytes = response.bytes().await?;
+            observe_body(call.as_mut().expect("request guard"), &bytes).await?;
 
-        if !status.is_success() {
-            if status == reqwest::StatusCode::UNAUTHORIZED {
-                self.record_401_attribution(
-                    crate::attribution::SamplingConsumer::Messages,
-                    sent_bearer.as_deref(),
+            if !status.is_success() {
+                if status == reqwest::StatusCode::UNAUTHORIZED {
+                    self.record_401_attribution(
+                        crate::attribution::SamplingConsumer::Messages,
+                        sent_bearer.as_deref(),
+                    );
+                    let endpoint = self.endpoint("messages");
+                    let server_message = user_facing_api_error_message(status, bytes.as_ref());
+                    return Err(auth_rejected(
+                        format!("Unauthorized (401) from {endpoint}: {server_message}"),
+                        sent_bearer.as_deref(),
+                    ));
+                }
+
+                let message = user_facing_api_error_message(status, bytes.as_ref());
+                tracing::warn!(
+                    status = %status,
+                    error_message = %message,
+                    body_preview = %Self::body_preview(bytes.as_ref()),
+                    model_id = %model_id,
+                    "messages API error"
                 );
-                let endpoint = self.endpoint("messages");
-                let server_message = user_facing_api_error_message(status, bytes.as_ref());
-                return Err(auth_rejected(
-                    format!("Unauthorized (401) from {endpoint}: {server_message}"),
-                    sent_bearer.as_deref(),
-                ));
+                return Err(SamplingError::Api {
+                    status,
+                    message,
+                    model_metadata,
+                    retry_after_secs,
+                    should_retry,
+                    error_code: parse_error_code(bytes.as_ref()),
+                });
             }
 
-            let message = user_facing_api_error_message(status, bytes.as_ref());
-            tracing::warn!(
-                status = %status,
-                error_message = %message,
-                body_preview = %Self::body_preview(bytes.as_ref()),
-                model_id = %model_id,
-                "messages API error"
-            );
-            return Err(SamplingError::Api {
-                status,
-                message,
-                model_metadata,
-                retry_after_secs,
-                should_retry,
-                error_code: parse_error_code(bytes.as_ref()),
-            });
+            let response_obj = serde_json::from_slice::<messages::MessagesResponse>(&bytes)
+                .map_err(|e| {
+                    let raw_body = String::from_utf8_lossy(&bytes);
+                    tracing::error!(
+                        error = %e,
+                        raw_body = %raw_body,
+                        "Failed to deserialize MessagesResponse"
+                    );
+                    SamplingError::Serialization(e)
+                })?;
+            Ok(response_obj)
         }
-
-        let response_obj =
-            serde_json::from_slice::<messages::MessagesResponse>(&bytes).map_err(|e| {
-                let raw_body = String::from_utf8_lossy(&bytes);
-                tracing::error!(
-                    error = %e,
-                    raw_body = %raw_body,
-                    "Failed to deserialize MessagesResponse"
-                );
-                SamplingError::Serialization(e)
-            })?;
-        Ok(response_obj)
+        .await;
+        finish_request(call, result).await
     }
 
     /// Create a streaming message using the Anthropic Messages API.
@@ -1783,100 +1859,106 @@ impl SamplingClient {
         );
         Self::log_request_headers(&built_request, "messages");
 
-        let response = self.http.execute(built_request).await.map_err(|e| {
-            tracing::debug!("HTTP request failed: {}", e);
-            record_stream_request_failure(&e);
-            e
-        })?;
+        let mut call = Some(self.start_usage(&model_id, CallBackend::Messages).await?);
+        let result = async {
+            let response = self.http.execute(built_request).await.map_err(|e| {
+                tracing::debug!("HTTP request failed: {}", e);
+                record_stream_request_failure(&e);
+                e
+            })?;
 
-        let status = response.status();
-        let span = tracing::Span::current();
-        span.record("status_code", status.as_u16() as i64);
-        span.record("success", status.is_success());
-        if !status.is_success() {
-            if status == reqwest::StatusCode::UNAUTHORIZED {
-                span.record("error", "unauthorized (401)");
-                self.record_401_attribution(
-                    crate::attribution::SamplingConsumer::MessagesStream,
-                    sent_bearer.as_deref(),
+            let status = response.status();
+            let span = tracing::Span::current();
+            span.record("status_code", status.as_u16() as i64);
+            span.record("success", status.is_success());
+            if !status.is_success() {
+                if status == reqwest::StatusCode::UNAUTHORIZED {
+                    span.record("error", "unauthorized (401)");
+                    self.record_401_attribution(
+                        crate::attribution::SamplingConsumer::MessagesStream,
+                        sent_bearer.as_deref(),
+                    );
+                    let endpoint = self.endpoint("messages");
+                    let body = response.bytes().await.unwrap_or_default();
+                    let server_message = user_facing_api_error_message(status, body.as_ref());
+                    return Err(auth_rejected(
+                        format!("Unauthorized (401) from {endpoint}: {server_message}"),
+                        sent_bearer.as_deref(),
+                    ));
+                }
+                let model_metadata = extract_model_metadata(response.headers());
+                let retry_after_secs = extract_retry_after(response.headers());
+                let should_retry = extract_should_retry(response.headers());
+                let bytes = response.bytes().await?;
+                let message = user_facing_api_error_message(status, bytes.as_ref());
+                span.record("error", message.as_str());
+                tracing::error!(
+                    status = %status,
+                    error_message = %message,
+                    body_preview = %Self::body_preview(bytes.as_ref()),
+                    model_id = %model_id,
+                    "messages API error"
                 );
-                let endpoint = self.endpoint("messages");
-                let body = response.bytes().await.unwrap_or_default();
-                let server_message = user_facing_api_error_message(status, body.as_ref());
-                return Err(auth_rejected(
-                    format!("Unauthorized (401) from {endpoint}: {server_message}"),
-                    sent_bearer.as_deref(),
-                ));
+                return Err(SamplingError::Api {
+                    status,
+                    message,
+                    model_metadata,
+                    retry_after_secs,
+                    should_retry,
+                    error_code: parse_error_code(bytes.as_ref()),
+                });
             }
+
             let model_metadata = extract_model_metadata(response.headers());
-            let retry_after_secs = extract_retry_after(response.headers());
-            let should_retry = extract_should_retry(response.headers());
-            let bytes = response.bytes().await?;
-            let message = user_facing_api_error_message(status, bytes.as_ref());
-            span.record("error", message.as_str());
-            tracing::error!(
-                status = %status,
-                error_message = %message,
-                body_preview = %Self::body_preview(bytes.as_ref()),
-                model_id = %model_id,
-                "messages API error"
-            );
-            return Err(SamplingError::Api {
-                status,
-                message,
-                model_metadata,
-                retry_after_secs,
-                should_retry,
-                error_code: parse_error_code(bytes.as_ref()),
-            });
-        }
 
-        let model_metadata = extract_model_metadata(response.headers());
-
-        // Strip UTF-8 BOM if present
-        const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
-        let mut is_first = true;
-        let byte_stream = response.bytes_stream().map(move |result| {
-            result.map(|bytes| {
-                if is_first {
-                    is_first = false;
-                    if bytes.starts_with(UTF8_BOM) {
-                        return bytes.slice(UTF8_BOM.len()..);
-                    }
-                }
-                bytes
-            })
-        });
-
-        // Turn raw bytes into SSE events
-        let event_stream = byte_stream.eventsource();
-
-        // Map SSE events into MessageStreamEvent.
-        // Uses `scan` so transport errors terminate the stream after the first
-        // error (same pattern as `chat_completion_stream`).
-        let events = event_stream
-            .scan(false, |had_transport_error, event_res| {
-                if *had_transport_error {
-                    return std::future::ready(None);
-                }
-                let item = match event_res {
-                    Ok(event) => {
-                        let data = &event.data;
-                        if data == "[DONE]" {
-                            return std::future::ready(None);
+            // Strip UTF-8 BOM if present
+            const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
+            let mut is_first = true;
+            let byte_stream = response.bytes_stream().map(move |result| {
+                result.map(|bytes| {
+                    if is_first {
+                        is_first = false;
+                        if bytes.starts_with(UTF8_BOM) {
+                            return bytes.slice(UTF8_BOM.len()..);
                         }
+                    }
+                    bytes
+                })
+            });
 
-                        tracing::info!(
-                            target: crate::sampling_log::TARGET,
-                            event = "sse_chunk",
-                            backend = "messages",
-                            data = %data,
-                        );
+            // Turn raw bytes into SSE events
+            let event_stream = observe_stream(
+                byte_stream.eventsource(),
+                call.take().expect("request guard"),
+                CallBackend::Messages,
+            );
 
-                        if let Some(stream_error) = try_parse_stream_error(data) {
-                            Some(Err(stream_error))
-                        } else {
-                            Some(
+            // Map SSE events into MessageStreamEvent.
+            // Uses `scan` so transport errors terminate the stream after the first
+            // error (same pattern as `chat_completion_stream`).
+            let events = event_stream
+                .scan(false, |had_transport_error, event_res| {
+                    if *had_transport_error {
+                        return std::future::ready(None);
+                    }
+                    let item = match event_res {
+                        Ok(event) => {
+                            let data = &event.data;
+                            if data == "[DONE]" {
+                                return std::future::ready(None);
+                            }
+
+                            tracing::info!(
+                                target: crate::sampling_log::TARGET,
+                                event = "sse_chunk",
+                                backend = "messages",
+                                data = %data,
+                            );
+
+                            if let Some(stream_error) = try_parse_stream_error(data) {
+                                Some(Err(stream_error))
+                            } else {
+                                Some(
                                 serde_json::from_str::<messages::MessageStreamEvent>(data).map_err(
                                     |e| {
                                         tracing::error!(
@@ -1888,18 +1970,21 @@ impl SamplingClient {
                                     },
                                 ),
                             )
+                            }
                         }
-                    }
-                    Err(e) => {
-                        *had_transport_error = true;
-                        Some(Err(SamplingError::EventStreamError(e.to_string())))
-                    }
-                };
-                std::future::ready(item)
-            })
-            .boxed();
+                        Err(e) => {
+                            *had_transport_error = true;
+                            Some(Err(e))
+                        }
+                    };
+                    std::future::ready(item)
+                })
+                .boxed();
 
-        Ok((events, model_metadata))
+            Ok((events, model_metadata))
+        }
+        .await;
+        finish_request(call, result).await
     }
 
     // =========================================================================
@@ -2346,6 +2431,7 @@ mod tests {
             user_id: None,
             client_version: None,
             attribution_callback: None,
+            usage_observer: None,
             bearer_resolver: None,
             supports_backend_search: false,
             compactions_remaining: None,

@@ -66,12 +66,47 @@ impl UsageObserver {
         }
     }
 
+    /// Forward the same immutable call id to the parent's session ledger.
+    /// Both checkpoints are acknowledged before a child request proceeds;
+    /// later background updates propagate without a one-time subagent fold.
+    pub fn with_parent(mut self, parent: &Self) -> Self {
+        self.sink = Arc::new(FanoutSink {
+            local: self.sink,
+            parent: parent.sink.clone(),
+        });
+        self
+    }
+
     async fn emit(&self, record: CallRecord) -> Result<(), RecordError> {
         let result = self.sink.record(record).await;
         if result.is_err() {
             self.sink.report_failure();
         }
         result
+    }
+}
+
+struct FanoutSink {
+    local: Arc<dyn UsageSink>,
+    parent: Arc<dyn UsageSink>,
+}
+impl UsageSink for FanoutSink {
+    fn record(&self, record: CallRecord) -> RecordFuture {
+        let local = self.local.record(record.clone());
+        let parent = self.parent.record(record);
+        Box::pin(async move {
+            let a = local.await;
+            let b = parent.await;
+            a.and(b)
+        })
+    }
+    fn record_detached(&self, record: CallRecord) {
+        self.local.record_detached(record.clone());
+        self.parent.record_detached(record);
+    }
+    fn report_failure(&self) {
+        self.local.report_failure();
+        self.parent.report_failure();
     }
 }
 
@@ -265,5 +300,38 @@ mod tests {
         assert_eq!(ledger.summary().main.cost.known_usd, Some(0.002));
         assert_eq!(ledger.summary().main.cost.total_usd, None);
         assert_eq!(ledger.recording_errors, 0);
+    }
+    #[test]
+    fn child_background_updates_reach_parent_without_double_counting() {
+        let (parent_sink, parent) = observer();
+        let (child_sink, child) = observer();
+        let child = child
+            .with_parent(&parent)
+            .for_purpose(CallPurpose::SessionSummary);
+        futures::executor::block_on(async {
+            let mut call = CallGuard::start(
+                Some(&child),
+                "child-aux",
+                ProviderProfile::Openrouter,
+                CallBackend::ChatCompletions,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                parent_sink.0.lock().unwrap().calls()[0].status,
+                CallStatus::Pending
+            );
+            call.usage(&serde_json::json!({"prompt_tokens":7,"completion_tokens":2,"cost":0.03}))
+                .await
+                .unwrap();
+            call.finish(CallStatus::Completed).await.unwrap();
+        });
+        let child_ledger = child_sink.0.lock().unwrap().clone();
+        let mut parent_ledger = parent_sink.0.lock().unwrap();
+        assert_eq!(*parent_ledger, child_ledger);
+        parent_ledger.merge(&child_ledger);
+        assert_eq!(parent_ledger.calls().len(), 1);
+        assert_eq!(parent_ledger.summary().auxiliary.cost.total_usd, Some(0.03));
+        assert_eq!(parent_ledger.summary().main.model_calls, 0);
     }
 }

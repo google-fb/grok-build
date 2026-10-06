@@ -34,6 +34,26 @@ pub struct ApiEmbeddingProvider {
 }
 
 impl ApiEmbeddingProvider {
+    pub fn with_usage_observer(
+        mut self,
+        observer: Option<xai_grok_usage::UsageObserver>,
+        provider: xai_grok_usage::ProviderProfile,
+    ) -> Self {
+        if let Some(observer) = observer {
+            // Append after AuthRetryMiddleware so an internal 401 resend also
+            // receives its own call id and durable pending record.
+            self.client = reqwest_middleware::ClientBuilder::from_client(self.client)
+                .with(xai_grok_usage::http::JsonRequestObserver {
+                    observer: observer.for_purpose(xai_grok_usage::CallPurpose::Embedding),
+                    model: self.model.clone(),
+                    provider,
+                    backend: xai_grok_usage::CallBackend::Embeddings,
+                })
+                .build();
+        }
+        self
+    }
+
     pub fn new(
         api_base: String,
         model: String,
@@ -142,6 +162,9 @@ impl EmbeddingProvider for ApiEmbeddingProvider {
                 let response = match self.client.execute(req).await {
                     Ok(r) => r,
                     Err(e) => {
+                        if xai_grok_usage::http::is_checkpoint_error(&e) {
+                            return Err(e.into());
+                        }
                         last_err = format!("request failed: {e}");
                         continue;
                     }

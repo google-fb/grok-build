@@ -6,11 +6,18 @@ edition.workspace = true
 description = "Content-free per-request provider usage records and accounting"
 
 [dependencies]
+async-trait = { workspace = true }
+http = { workspace = true }
+reqwest = { workspace = true }
+reqwest-middleware = { workspace = true }
+thiserror = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+axum = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros", "net"] }
 futures = { workspace = true }
 
 [lints]

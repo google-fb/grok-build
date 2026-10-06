@@ -174,6 +174,7 @@ pub fn format_sampling_error(err: &SamplingError, retry_count: Option<u32>) -> S
                 retry_prefix, message
             )
         }
+        SamplingError::UsageCheckpoint => format!("{retry_prefix}{err}"),
         SamplingError::InvalidConfiguration(msg) => {
             format!(
                 "{}Invalid configuration: {}. Please check your model settings.",
@@ -291,6 +292,7 @@ pub(crate) fn clone_error(err: &SamplingError) -> SamplingError {
             credential: *credential,
         },
         SamplingError::InvalidConfiguration(msg) => SamplingError::InvalidConfiguration(msg),
+        SamplingError::UsageCheckpoint => SamplingError::UsageCheckpoint,
         SamplingError::Http(e) => SamplingError::EventStreamError(e.to_string()),
         SamplingError::Serialization(e) => SamplingError::serialization_message(e),
         SamplingError::Api {

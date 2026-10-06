@@ -13052,6 +13052,7 @@ dependencies = [
 name = "xai-chat-state"
 version = "0.1.0"
 dependencies = [
+ "xai-grok-usage",
  "indexmap",
  "serde",
  "serde_json",
@@ -13360,6 +13361,7 @@ dependencies = [
 name = "xai-grok-agent"
 version = "0.1.0"
 dependencies = [
+ "xai-grok-usage",
  "chrono",
  "dunce",
  "git2",
@@ -13678,6 +13680,7 @@ dependencies = [
 name = "xai-grok-memory"
 version = "0.1.0"
 dependencies = [
+ "xai-grok-usage",
  "anyhow",
  "arc-swap",
  "async-trait",
@@ -14030,6 +14033,7 @@ dependencies = [
  "xai-grok-extra-ca",
  "xai-grok-sampling-types",
  "xai-grok-test-support",
+ "xai-grok-usage",
  "xai-grok-version",
 ]
 
@@ -14155,6 +14159,7 @@ dependencies = [
 name = "xai-grok-shell"
 version = "1.0.12"
 dependencies = [
+ "xai-grok-usage",
  "agent-client-protocol",
  "anyhow",
  "arc-swap",
@@ -14488,6 +14493,7 @@ dependencies = [
 name = "xai-grok-tools"
 version = "0.1.220-alpha.4"
 dependencies = [
+ "xai-grok-usage",
  "anyhow",
  "arc-swap",
  "async-lsp",
@@ -14621,6 +14627,13 @@ dependencies = [
 name = "xai-grok-usage"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "tokio",
+ "async-trait",
+ "http 1.4.0",
+ "reqwest 0.12.24",
+ "reqwest-middleware 0.4.2",
+ "thiserror 2.0.18",
  "futures",
  "serde",
  "serde_json",

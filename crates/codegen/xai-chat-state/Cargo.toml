@@ -9,6 +9,7 @@ description = "Actor-based chat state management for xAI agents"
 default-bazel = []
 
 [dependencies]
+xai-grok-usage = { path = "../xai-grok-usage" }
 indexmap = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

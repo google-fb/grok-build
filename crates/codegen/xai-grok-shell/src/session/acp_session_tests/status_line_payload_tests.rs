@@ -44,3 +44,48 @@ async fn the_payload_carries_real_values_or_no_field_at_all() {
         })
         .await;
 }
+
+#[tokio::test]
+async fn status_line_cost_sums_provider_sources_and_hides_missing_amounts() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let (gateway_tx, _) = tokio::sync::mpsc::unbounded_channel();
+            let (persistence_tx, _) = tokio::sync::mpsc::unbounded_channel();
+            let actor = create_test_actor(50_000, 100_000, 85, gateway_tx, persistence_tx).await;
+            let usage = xai_grok_sampling_types::TokenUsage {
+                prompt_tokens: 10,
+                completion_tokens: 2,
+                ..Default::default()
+            };
+            actor.chat_state_handle.record_provider_model_call_usage(
+                Some("xai-model".into()),
+                usage.clone(),
+                None,
+                Some(100_000_000),
+                xai_grok_sampling_types::ProviderCost::from_xai_ticks(Some(100_000_000)),
+            );
+            actor.chat_state_handle.record_provider_model_call_usage(
+                Some("router-model".into()),
+                usage.clone(),
+                None,
+                None,
+                Some(xai_grok_sampling_types::ProviderCost {
+                    usd: 0.02,
+                    source: xai_grok_sampling_types::CostSource::OpenrouterUsageCost,
+                }),
+            );
+            assert_eq!(
+                actor.build_status_context().await.cost.total_cost_usd,
+                Some(0.03)
+            );
+            actor.chat_state_handle.record_provider_model_call_usage(
+                Some("unknown-cost-model".into()),
+                usage,
+                None,
+                None,
+                None,
+            );
+            assert_eq!(actor.build_status_context().await.cost.total_cost_usd, None);
+        })
+        .await;
+}

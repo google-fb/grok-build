@@ -95,6 +95,18 @@ impl ChatPersistence for ChannelChatPersistence {
     fn persist_usage(&mut self, ledger: &UsageLedger) {
         let _ = self.tx.send(PersistenceMsg::Usage(ledger.clone()));
     }
+
+    fn persist_usage_and_ack(
+        &mut self,
+        ledger: &UsageLedger,
+        respond_to: oneshot::Sender<io::Result<()>>,
+    ) {
+        // A closed channel drops the sender; the observer treats a lost ack as failure.
+        let _ = self.tx.send(PersistenceMsg::UsageAndAck {
+            ledger: ledger.clone(),
+            respond_to,
+        });
+    }
 }
 
 #[cfg(test)]

@@ -70,6 +70,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     emit({'tool_calls': [{'index': 0, 'function': {'arguments': arguments[17:]}}]})
                     emit({}, 'tool_calls')
             elif owner.timeout:
+                partial = getattr(owner, 'partial_timeout_usage', None)
+                if partial is not None:
+                    emit(usage=partial)
                 owner.second_request.set()
                 owner.release.wait(40)
                 return
@@ -229,7 +232,8 @@ api_key = "synthetic-do-not-echo"
                         thread.join(2)
 
     def run_case(self, profile='openrouter', output='streaming-messages-json', money=None,
-                 timeout=False, missing_second=False):
+                 timeout=False, missing_second=False, handler_class=Handler, inspect=None,
+                 before_stop=None, timeout_command=False):
         self.profile, self.money, self.timeout, self.missing_second = profile, money, timeout, missing_second
         self.requests, self.errors = [], []
         self.second_request, self.release = threading.Event(), threading.Event()
@@ -237,7 +241,7 @@ api_key = "synthetic-do-not-echo"
             root = Path(folder)
             for name in ('home', 'grok', 'work', 'tmp'):
                 (root/name).mkdir()
-            server = Server(('127.0.0.1', 28081), Handler)
+            server = Server(('127.0.0.1', 28081), handler_class)
             server.owner = self
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
@@ -262,13 +266,20 @@ provider_profile = "bad-profile"
             cmd = [str(self.binary), '-p', 'Synthetic protocol check.', '--model', 'synthetic',
                    '--output-format', output, '--max-turns', '3', '--permission-mode', 'bypassPermissions',
                    '--disable-web-search']
+            if timeout_command:
+                cmd = ['timeout', '--signal=TERM', '--kill-after=3s', '12s', *cmd]
             process = subprocess.Popen(cmd, cwd=root/'work', env=env, stdout=subprocess.PIPE,
                                        stderr=subprocess.PIPE, text=True, start_new_session=True)
             try:
                 if timeout:
                     self.assertTrue(self.second_request.wait(35), 'CLI never reached second request')
-                    os.killpg(process.pid, signal.SIGTERM)
+                    if before_stop is not None:
+                        before_stop(root, self)
+                    if not timeout_command:
+                        os.killpg(process.pid, signal.SIGTERM)
                 stdout, stderr = process.communicate(timeout=40)
+                if timeout_command:
+                    self.assertEqual(process.returncode, 124, stdout[-2000:]+stderr[-2000:])
                 if not timeout:
                     self.assertEqual(process.returncode, 0, stdout[-2000:]+stderr[-2000:])
                 self.assertFalse(self.errors, self.errors)
@@ -294,6 +305,8 @@ provider_profile = "bad-profile"
                     if output == 'json': terminal = json.loads(stdout)
                     else:
                         terminal = next(row for row in map(json.loads, stdout.splitlines()) if row.get('type') == 'result')
+                if inspect is not None:
+                    inspect(root, ledger, terminal, self)
                 return ledger, terminal
             finally:
                 if process.poll() is None:

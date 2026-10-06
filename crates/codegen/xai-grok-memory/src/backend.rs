@@ -131,6 +131,8 @@ pub struct MemoryBackendParams {
     pub embed_base_url: String,
     /// API key for embedding API calls.
     pub embed_api_key: Option<String>,
+    pub usage_observer: Option<xai_grok_usage::UsageObserver>,
+    pub provider_profile: xai_grok_usage::ProviderProfile,
     /// Hybrid search scoring config (weights, thresholds, decay, MMR).
     pub search_config: xai_grok_config_types::MemorySearchConfig,
     /// File watcher for sync-on-search; `None` disables external-edit detection.
@@ -152,6 +154,9 @@ impl MemoryBackendParams {
             &self.embed_base_url,
         )
         .await
+        .map(|provider| {
+            provider.with_usage_observer(self.usage_observer.clone(), self.provider_profile)
+        })
     }
 }
 
@@ -208,6 +213,8 @@ pub struct MemoryBackendImpl {
     embed_base_url: String,
     /// API key for embedding requests.
     embed_api_key: Option<String>,
+    usage_observer: Option<xai_grok_usage::UsageObserver>,
+    provider_profile: xai_grok_usage::ProviderProfile,
     /// Search scoring config (weights, min_score, max_results).
     search_config: xai_grok_config_types::MemorySearchConfig,
     /// File watcher for detecting external memory edits.
@@ -232,6 +239,8 @@ impl MemoryBackendImpl {
             embed_config: None,
             embed_base_url: String::new(),
             embed_api_key: None,
+            usage_observer: None,
+            provider_profile: Default::default(),
             search_config: xai_grok_config_types::MemorySearchConfig::default(),
             watcher: None,
             stale_claim_secs: 60,
@@ -289,6 +298,9 @@ impl MemoryBackendImpl {
             &self.embed_base_url,
         )
         .await
+        .map(|provider| {
+            provider.with_usage_observer(self.usage_observer.clone(), self.provider_profile)
+        })
     }
 
     /// Build a fully configured backend for a live session.
@@ -310,6 +322,8 @@ impl MemoryBackendImpl {
             backend = backend.with_watcher(w.clone(), params.stale_claim_secs);
         }
         backend.embedding_credentials = params.embedding_credentials.clone();
+        backend.usage_observer = params.usage_observer.clone();
+        backend.provider_profile = params.provider_profile;
         backend
     }
 }
@@ -603,6 +617,8 @@ mod factory_tests {
             embed_config: None,
             embed_base_url: String::new(),
             embed_api_key: None,
+            usage_observer: None,
+            provider_profile: Default::default(),
             search_config: MemorySearchConfig::default(),
             watcher: None,
             stale_claim_secs: 60,
@@ -901,7 +917,9 @@ mod factory_tests {
         let params = MemoryBackendParams {
             embed_config: Some(MemoryEmbeddingConfig::default()),
             embed_base_url: "http://localhost".to_string(),
-            embed_api_key: None, // No key, so the provider cannot be created.
+            embed_api_key: None,
+            usage_observer: None,
+            provider_profile: Default::default(), // No key, so the provider cannot be created.
             ..make_params_fts_only("test-embed-no-key")
         };
         let backend = MemoryBackendImpl::from_session_params(storage, &params);
@@ -1151,6 +1169,8 @@ mod factory_tests {
         });
 
         let params = MemoryBackendParams {
+            provider_profile: Default::default(),
+            usage_observer: None,
             session_id: "s1".into(),
             embed_config: Some(MemoryEmbeddingConfig {
                 model: Some("test-embed-model".into()),
