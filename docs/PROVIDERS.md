@@ -36,7 +36,25 @@ including a separate `api_base_url`, and to loopback endpoints. A misspelled
 provider ID is an error. A model referencing a declared provider with an invalid
 field (for example a misspelled profile or a non-boolean capability) is rejected
 at configuration loading, before requests; the error identifies the provider
-and field without printing credential values.
+and field without printing credential values. Referenced provider tables also
+reject unknown keys, including misspelled connection keys. Unreferenced bad
+provider entries remain warnings. A malformed or empty model-level
+`model_provider` is an error, never an implicit xAI selection.
+
+A custom connection needs an explicit, nonblank `base_url` on its model or
+provider. Selecting a non-xAI profile or supplying a per-model/provider credential
+without that endpoint is rejected. A per-model/provider credential also
+requires an explicit endpoint when `provider_profile = "xai"`; selecting a
+profile alone cannot authorize sending a supplied key to an implicit URL.
+Built-in xAI models without per-model credential overrides retain their defaults.
+Direct model overrides may also inherit explicitly configured custom
+`[endpoints].models_base_url`, or a custom proxy/API URL pair. This does not
+replace the required endpoint of a referenced provider table. Environment-only
+xAI URL overrides do not establish custom provider identity.
+Connection fields with invalid types are rejected before the tolerant model
+catalog parser can discard them. Unknown model keys without an explicit
+endpoint are rejected as well, since a misspelling can otherwise erase all
+custom routing intent.
 
 The built-in xAI models use the `xai` profile. A custom model defaults to
 `compatible`; other profiles are `openrouter` and `vllm`. Only `xai` enables

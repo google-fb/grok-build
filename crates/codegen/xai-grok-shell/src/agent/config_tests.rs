@@ -1679,6 +1679,9 @@ fn user_override_adds_api_key_to_default_model() {
     let raw_config: toml::Value = toml::from_str(&format!(
         r#"
             [model."{dm}"]
+            base_url = "https://cli-chat-proxy.grok.com/v1"
+            api_base_url = "https://api.x.ai/v1"
+            provider_profile = "xai"
             api_key = "user-custom-api-key"
             "#,
     ))
@@ -1690,7 +1693,7 @@ fn user_override_adds_api_key_to_default_model() {
     assert_eq!(model.info.model, dm);
     assert_eq!(
         model.info.base_url, "https://cli-chat-proxy.grok.com/v1",
-        "base_url should inherit from default, not be stale"
+        "base_url should retain the explicitly selected xAI proxy"
     );
 }
 #[test]
@@ -3598,6 +3601,8 @@ fn e2e_models_endpoint_serde_alias_parses_as_models_list_url() {
 fn e2e_config_models_parsed_directly_not_via_deep_merge() {
     let raw: toml::Value = toml::from_str(
         r#"
+            [endpoints]
+            models_base_url = "https://provider.example/v1"
             [model.custom-model]
             model = "my-custom-llm"
             api_key = "custom-key"

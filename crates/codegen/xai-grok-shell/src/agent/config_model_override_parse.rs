@@ -3,8 +3,9 @@
 //! It also defines [`ConfigWarning`] and [`WarningTarget`], the shared warning
 //! vocabulary; the `[auth_provider.*]` parser in `config.rs` emits them too.
 //!
-//! A model entry must survive a bad field: warn and skip the field, never
-//! drop the model (managed configs must not lose catalog entries).
+//! This catalog parser preserves a model entry after bad fields, with warnings.
+//! Before startup, `model_providers::validate_model_connections` rejects unsafe
+//! routing/credential omissions; those warnings must never become an xAI fallback.
 //!
 //! Every table is deserialized through `serde_ignored`, so unknown fields
 //! warn on every path and [`ConfigModelOverride`] stays the single source of
@@ -477,6 +478,7 @@ mod tests {
             r#"
             [model."grok-4.5"]
             model = "grok-4.5"
+            base_url = "https://provider.example/v1"
             env_key = "ANTHROPIC_AUTH_TOKEN"
             compactions_remaining = 1
             send_compactions_remaining = true
@@ -521,6 +523,7 @@ mod tests {
             r#"
             [model."grok-4.5"]
             model = "grok-4.5"
+            base_url = "https://provider.example/v1"
             env_key = "ANTHROPIC_AUTH_TOKEN"
             reasoning_effort = "not-a-level"
             "#,

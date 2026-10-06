@@ -386,6 +386,7 @@ fn a4_json_without_usage_has_explicit_unknown_money() {
     let result = emitter.build_json_result("EndTurn", "synthetic-session", "synthetic-request");
     assert_eq!(result.get("total_cost_usd"), Some(&serde_json::Value::Null));
     assert_eq!(result["usage_is_incomplete"], true);
+    assert_eq!(result["cost_is_partial"], false);
     assert_eq!(result["cost_sources"], serde_json::json!([]));
     assert!(result.get("usage").is_none());
 }

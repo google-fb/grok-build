@@ -196,8 +196,10 @@ Usage notes:
   (for example incomplete subagent usage or a turn-end drain timeout). Either
   flag withholds all terminal and per-model money as `null`; tokens can still
   be present and may under-count. With no usage snapshot the result has
-  `usage_is_incomplete = true`, `cost_is_partial = true`, null amounts, an empty
-  source list, and no fabricated zero token totals.
+  `usage_is_incomplete = true`, `cost_is_partial = false`, null amounts, an empty
+  source list, and no fabricated zero token totals. `cost_is_partial` requires a
+  known subtotal plus calls with missing cost; an entirely unknown bill has no
+  known subtotal, so incompleteness alone withholds its amount.
 - A durable `usage.json` checkpoint can retain a known partial amount after
   interruption. It does not certify terminal settlement. These totals exclude
   auxiliary requests and are not a provider invoice. See [provider cost

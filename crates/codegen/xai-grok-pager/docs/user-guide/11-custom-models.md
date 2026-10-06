@@ -171,17 +171,27 @@ Both fields also work on a shared `[model_providers.<id>]` block. A model that p
 You can override specific fields of built-in models without redefining everything. Only specify the fields you want to change:
 
 ```toml
-# Override only the API key for a default model
-[model.grok-4.6]
+# Explicitly keep the xAI endpoint when overriding its API key
+[model."grok-4.6"]
+provider_profile = "xai"
+base_url = "https://api.x.ai/v1"
 api_key = "my-api-key"
+```
 
+Or also override the temperature:
+
+```toml
 # Override temperature and add a custom API key
-[model.grok-4.6]
+[model."grok-4.6"]
+provider_profile = "xai"
+base_url = "https://api.x.ai/v1"
 temperature = 0.5
 api_key = "sk-custom"
 ```
 
-When you override a built-in model, Grok starts with the default configuration (including the correct `base_url`), then applies only the fields you specify. Unspecified fields inherit from the default.
+When you override a built-in model, Grok starts with the default configuration (including the correct `base_url`), then applies only the fields you specify. Unspecified fields inherit from the default. A per-model credential must have an
+explicit `base_url` (or inherit explicitly configured custom enterprise endpoints),
+so a misspelled third-party endpoint cannot silently send that credential to xAI.
 
 ### Priority Order
 
@@ -298,7 +308,7 @@ grok
 models_base_url = "https://api.acme.com/v1"
 
 # Override only the API key for a specific model
-[model.grok-4.6]
+[model."grok-4.6"]
 api_key = "my-api-key"
 ```
 

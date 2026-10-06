@@ -172,6 +172,177 @@ pub(crate) fn parse_model_providers(
     (providers, warnings)
 }
 
+/// Connection intent cannot use the lenient catalog parser's fallback policy:
+/// dropping a routing field could send both credentials and prompts elsewhere.
+/// Validate before auth, model discovery, or any other startup network request.
+pub(crate) fn validate_model_connections(
+    raw: &toml::Value,
+    models: &IndexMap<String, ConfigModelOverride>,
+    providers: &IndexMap<String, ModelProviderConfig>,
+    model_warnings: &[ConfigWarning],
+    provider_warnings: &[ConfigWarning],
+) -> Result<(), String> {
+    use super::config_model_override_parse::WarningTarget;
+    use xai_grok_sampling_types::ProviderProfile;
+
+    if let Some(section) = raw.get("model") {
+        let Some(table) = section.as_table() else {
+            return Err(
+                "invalid model field <section>; model configuration must be a table".to_owned(),
+            );
+        };
+        for (id, entry) in table {
+            if !entry.is_table() {
+                return Err(format!(
+                    "invalid model.\"{id}\" field <entry>; model configuration must be a table"
+                ));
+            }
+        }
+    }
+    // Preserve deliberately configured enterprise defaults. Environment-only
+    // overrides of the built-in xAI URLs do not establish a provider identity.
+    let custom_global_endpoint = |field: &str| {
+        raw.get("endpoints")
+            .and_then(|v| v.get(field))
+            .and_then(toml::Value::as_str)
+            .is_some_and(|url| {
+                !url.trim().is_empty()
+                    && !crate::util::is_xai_api_bearer_url(url)
+                    && !crate::util::is_cli_chat_proxy_url(url)
+            })
+    };
+    let explicit_custom_defaults = custom_global_endpoint("models_base_url")
+        || (custom_global_endpoint("cli_chat_proxy_base_url")
+            && custom_global_endpoint("xai_api_base_url"));
+
+    for (model_id, model) in models {
+        let model_error = |field: &str| {
+            format!(
+                "invalid model.\"{model_id}\" field {field}; explicit valid connection required"
+            )
+        };
+        let raw_model = raw.get("model").and_then(|models| models.get(model_id));
+        if let Some(value) = raw_model.and_then(|model| model.get("model_provider"))
+            && !value.as_str().is_some_and(|id| !id.trim().is_empty())
+        {
+            return Err(model_error("model_provider"));
+        }
+        // These fields determine where requests/credentials go. Invalid values
+        // must not be pruned into an otherwise apparently valid xAI default.
+        for warning in model_warnings {
+            if let WarningTarget::Model {
+                key,
+                field: Some(field),
+            } = &warning.target
+                && key == model_id
+                && warning.kind == ConfigWarningKind::InvalidValue
+                && matches!(
+                    field.as_str(),
+                    "model_provider"
+                        | "provider_profile"
+                        | "base_url"
+                        | "api_base_url"
+                        | "api_backend"
+                        | "api_key"
+                        | "env_key"
+                        | "auth_provider"
+                        | "allow_xai_credential_fallback"
+                )
+            {
+                return Err(model_error(field));
+            }
+        }
+        let effective = if let Some(provider_id) = model.model_provider.as_deref() {
+            let provider_error = |field: &str| {
+                format!(
+                    "invalid model_providers.\"{provider_id}\" field {field}; referenced by model.\"{model_id}\"; provider configuration rejected"
+                )
+            };
+            let Some(value) = raw.get("model_providers").and_then(|p| p.get(provider_id)) else {
+                return Err(format!(
+                    "undefined model_provider \"{provider_id}\" referenced by model.\"{model_id}\"; provider configuration rejected"
+                ));
+            };
+            let Some(provider) = providers.get(provider_id) else {
+                let fields: Vec<_> = value
+                    .as_table()
+                    .map(|table| {
+                        table
+                            .iter()
+                            .filter_map(|(field, value)| {
+                                let one = toml::Value::Table(
+                                    [(field.clone(), value.clone())].into_iter().collect(),
+                                );
+                                one.try_into::<ModelProviderConfig>()
+                                    .is_err()
+                                    .then_some(field.as_str())
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                return Err(provider_error(&if fields.is_empty() {
+                    "<entry>".to_owned()
+                } else {
+                    fields.join(", ")
+                }));
+            };
+            // Reject arbitrary misspellings, not just a list of known typos.
+            // Unreferenced provider tables continue to produce warnings only.
+            for warning in provider_warnings {
+                if let WarningTarget::ModelProvider {
+                    id,
+                    field: Some(field),
+                } = &warning.target
+                    && id == provider_id
+                    && warning.kind == ConfigWarningKind::UnknownField
+                {
+                    return Err(provider_error(field));
+                }
+            }
+            model.with_provider_defaults(provider, provider_id)
+        } else {
+            model.clone()
+        };
+        for (field, value) in [
+            ("base_url", &effective.base_url),
+            ("api_base_url", &effective.api_base_url),
+        ] {
+            if value.as_deref().is_some_and(|url| url.trim().is_empty()) {
+                return Err(model_error(field));
+            }
+        }
+        if effective.base_url.is_none() {
+            // A typo can otherwise hide all evidence of a custom connection,
+            // even when no explicit profile or credential remains after parse.
+            for warning in model_warnings {
+                if let WarningTarget::Model {
+                    key,
+                    field: Some(field),
+                } = &warning.target
+                    && key == model_id
+                    && warning.kind == ConfigWarningKind::UnknownField
+                {
+                    return Err(model_error(field));
+                }
+            }
+            let own_credential = effective.api_key.is_some()
+                || effective.env_key.is_some()
+                || effective.auth_provider.is_some();
+            let connection_intent = model.model_provider.is_some()
+                || effective.provider_profile.is_some()
+                || own_credential
+                || effective.api_base_url.is_some();
+            if connection_intent
+                && (effective.provider_profile != Some(ProviderProfile::Xai) || own_credential)
+                && !(model.model_provider.is_none() && explicit_custom_defaults)
+            {
+                return Err(model_error("base_url"));
+            }
+        }
+    }
+    Ok(())
+}
+
 impl ConfigModelOverride {
     pub(crate) fn with_provider_defaults(
         &self,
@@ -729,6 +900,135 @@ mod tests {
                 "must not echo credentials"
             );
         }
+    }
+
+    #[test]
+    fn connection_intent_never_inherits_an_implicit_xai_endpoint() {
+        let provider_cases = [
+            (
+                "base_ur",
+                "base_ur = \"https://provider.example/v1\"\nprovider_profile = \"openrouter\"",
+            ),
+            (
+                "api_base",
+                "api_base = \"https://provider.example/v1\"\nenv_key = \"SYNTHETIC_PROVIDER_KEY\"",
+            ),
+            ("base_uri", "base_uri = \"https://provider.example/v1\""),
+            (
+                "endpoint_url",
+                "endpoint_url = \"https://provider.example/v1\"\nprovider_profile = \"xai\"",
+            ),
+            ("base_url", "provider_profile = \"openrouter\""),
+            ("base_url", "provider_profile = \"vllm\""),
+            (
+                "base_url",
+                "provider_profile = \"xai\"\napi_key = \"synthetic-do-not-echo\"",
+            ),
+            ("base_url", "provider_profile = \"compatible\""),
+            ("base_url", "api_key = \"synthetic-do-not-echo\""),
+            ("base_url", "base_url = \"   \""),
+        ];
+        for (field, settings) in provider_cases {
+            let raw: toml::Value = toml::from_str(&format!(
+                "[model_providers.synthetic]\n{settings}\n[model.test]\nmodel_provider = \"synthetic\"\nmodel = \"synthetic-model\""
+            )).unwrap();
+            let error = Config::new_from_toml_cfg(&raw)
+                .err()
+                .expect("unsafe fallback accepted");
+            assert!(error.contains(field), "{error}");
+            assert!(!error.contains("synthetic-do-not-echo"));
+        }
+        for value in ["[\"synthetic\"]", "7", "false", "{}", "\"\"", "\"  \""] {
+            let raw: toml::Value = toml::from_str(&format!(
+                "[model.test]\nmodel_provider = {value}\nbase_url = \"https://provider.example/v1\"\napi_key = \"synthetic-do-not-echo\""
+            )).unwrap();
+            let error = Config::new_from_toml_cfg(&raw)
+                .err()
+                .expect("invalid provider reference accepted");
+            assert!(error.contains("model_provider"), "{error}");
+            assert!(!error.contains("synthetic-do-not-echo"));
+        }
+        for (field, settings) in [
+            ("base_url", "api_key = \"synthetic-do-not-echo\""),
+            ("base_url", "provider_profile = \"vllm\""),
+            (
+                "base_url",
+                "provider_profile = \"xai\"\napi_key = \"synthetic-do-not-echo\"",
+            ),
+            ("base_url", "base_url = 7"),
+            (
+                "provider_profile",
+                "provider_profile = \"typo\"\nbase_url = \"https://provider.example/v1\"",
+            ),
+            ("baseURL", "baseURL = \"https://provider.example/v1\""),
+        ] {
+            let raw: toml::Value = toml::from_str(&format!("[model.test]\n{settings}")).unwrap();
+            let error = Config::new_from_toml_cfg(&raw)
+                .err()
+                .expect("invalid model connection accepted");
+            assert!(error.contains(field), "{error}");
+            assert!(!error.contains("synthetic-do-not-echo"));
+        }
+    }
+
+    #[test]
+    fn invalid_model_tables_cannot_discard_connection_intent() {
+        for text in ["model = []", "[model]\nsynthetic = false"] {
+            let raw: toml::Value = toml::from_str(text).unwrap();
+            let error = Config::new_from_toml_cfg(&raw)
+                .err()
+                .expect("invalid model table accepted");
+            assert!(error.contains("invalid model"));
+        }
+    }
+
+    #[test]
+    fn explicit_connections_and_unused_bad_providers_remain_valid() {
+        let empty: toml::Value = toml::from_str("").unwrap();
+        let defaults = Config::new_from_toml_cfg(&empty).unwrap();
+        assert!(!resolve_model_list(&defaults, None).is_empty());
+        for profile in ["openrouter", "vllm", "compatible", "xai"] {
+            let raw: toml::Value = toml::from_str(&format!(
+                r#"
+                [model_providers.unused]
+                base_ur = "https://unused.example/v1"
+                [model_providers.valid]
+                base_url = "https://provider.example/v1"
+                provider_profile = "{profile}"
+                [model.valid]
+                model_provider = "valid"
+            "#
+            ))
+            .unwrap();
+            let cfg = Config::new_from_toml_cfg(&raw).unwrap();
+            assert!(!cfg.config_warnings.is_empty());
+            let models = resolve_model_list(&cfg, None);
+            assert_eq!(models["valid"].info.base_url, "https://provider.example/v1");
+        }
+        let raw: toml::Value = toml::from_str(
+            r#"
+            [model.explicit-xai]
+            provider_profile = "xai"
+            base_url = "https://api.x.ai/v1"
+            api_key = "synthetic-xai-key"
+        "#,
+        )
+        .unwrap();
+        assert!(Config::new_from_toml_cfg(&raw).is_ok());
+        let raw: toml::Value = toml::from_str(
+            r#"
+            [endpoints]
+            models_base_url = "https://enterprise.example/v1"
+            [model.custom]
+            api_key = "synthetic-enterprise-key"
+        "#,
+        )
+        .unwrap();
+        let cfg = Config::new_from_toml_cfg(&raw).unwrap();
+        assert_eq!(
+            resolve_model_list(&cfg, None)["custom"].info.base_url,
+            "https://enterprise.example/v1"
+        );
     }
 
     #[test]

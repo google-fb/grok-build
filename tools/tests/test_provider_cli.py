@@ -173,6 +173,61 @@ model = "synthetic-model"
                     for thread in threads:
                         thread.join(2)
 
+    def test_invalid_connection_keys_never_request_either_endpoint(self):
+        cases = []
+        for field in ('base_ur', 'api_base', 'base_uri', 'baseURL', 'endpoint_url'):
+            cases.append((field, f'''[model_providers.synthetic]
+{field} = "http://127.0.0.1:28081/v1"
+provider_profile = "openrouter"
+env_key = "SYNTHETIC_PROVIDER_KEY"
+[model.synthetic]
+model_provider = "synthetic"
+'''))
+        for value in ('["synthetic"]', '7', 'false', '{}', '""', '"  "'):
+            cases.append(('model_provider', f'''[model.synthetic]
+model_provider = {value}
+api_key = "synthetic-do-not-echo"
+'''))
+        for settings in ('provider_profile = "vllm"', 'provider_profile = "compatible"',
+                         'api_key = "synthetic-do-not-echo"', 'base_url = "   "',
+                         'provider_profile = "xai"\napi_key = "synthetic-do-not-echo"'):
+            cases.append(('base_url', '[model.synthetic]\n'+settings))
+        cases.append(("<entry>", "[model]\nsynthetic = false"))
+        for field, config in cases:
+            with self.subTest(field=field, config=config), tempfile.TemporaryDirectory(prefix='astra-connection-') as folder:
+                root = Path(folder)
+                for name in ('home', 'grok', 'work', 'tmp'):
+                    (root/name).mkdir()
+                servers = [Server(('127.0.0.1', port), ProbeHandler) for port in (28081, 28181)]
+                threads = []
+                for server in servers:
+                    server.requests = []
+                    thread = threading.Thread(target=server.serve_forever, daemon=True)
+                    thread.start()
+                    threads.append(thread)
+                try:
+                    (root/'grok/config.toml').write_text(config)
+                    result = subprocess.run([str(self.binary), '-p', 'Synthetic connection check.',
+                        '--model', 'synthetic', '--output-format', 'json', '--max-turns', '1',
+                        '--disable-web-search'], cwd=root/'work', env=isolated_env(root, 'http://127.0.0.1:28181/v1'),
+                        capture_output=True, text=True, timeout=30)
+                    output = result.stdout + result.stderr
+                    self.assertEqual([len(server.requests) for server in servers], [0, 0],
+                                     f'{field}: provider/xAI request counts must both be zero')
+                    self.assertNotEqual(result.returncode, 0, output)
+                    self.assertIn('synthetic', output)
+                    self.assertIn(field, output)
+                    for secret in ('synthetic-do-not-echo', 'synthetic-provider-key', 'synthetic-xai-must-not-leak'):
+                        self.assertNotIn(secret, output)
+                    for server in servers:
+                        self.assertEqual(server.requests, [], 'invalid connection must make no HTTP request')
+                finally:
+                    for server in servers:
+                        server.shutdown()
+                        server.server_close()
+                    for thread in threads:
+                        thread.join(2)
+
     def run_case(self, profile='openrouter', output='streaming-messages-json', money=None,
                  timeout=False, missing_second=False):
         self.profile, self.money, self.timeout, self.missing_second = profile, money, timeout, missing_second
@@ -198,6 +253,10 @@ provider_profile = "{profile}"
 model_provider = "synthetic"
 model = "synthetic-model"
 context_window = 32768
+[model_providers.unused-typo]
+base_ur = "http://127.0.0.1:28181/v1"
+[model_providers.unused-invalid]
+provider_profile = "bad-profile"
 ''')
             env = isolated_env(root, endpoint)
             cmd = [str(self.binary), '-p', 'Synthetic protocol check.', '--model', 'synthetic',
