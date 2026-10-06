@@ -296,7 +296,7 @@ pub(crate) fn validate_model_connections(
                     && id == provider_id
                     && warning.kind == ConfigWarningKind::UnknownField
                 {
-                    return Err(provider_error(field));
+                    return Err(format!("{}; unknown field", provider_error(field)));
                 }
             }
             model.with_provider_defaults(provider, provider_id)
@@ -322,7 +322,7 @@ pub(crate) fn validate_model_connections(
                     && key == model_id
                     && warning.kind == ConfigWarningKind::UnknownField
                 {
-                    return Err(model_error(field));
+                    return Err(format!("{}; unknown field", model_error(field)));
                 }
             }
             let own_credential = effective.api_key.is_some()
@@ -336,7 +336,7 @@ pub(crate) fn validate_model_connections(
                 && (effective.provider_profile != Some(ProviderProfile::Xai) || own_credential)
                 && !(model.model_provider.is_none() && explicit_custom_defaults)
             {
-                return Err(model_error("base_url"));
+                return Err(format!("{}; missing endpoint", model_error("base_url")));
             }
         }
     }
@@ -417,12 +417,6 @@ impl ConfigModelOverride {
                 .clone()
                 .or_else(|| auth.as_ref().map(|_| model_provider_auth_name(provider_id)));
         }
-        merged
-    }
-
-    pub(crate) fn with_missing_provider(&self) -> Self {
-        let mut merged = self.clone();
-        merged.model_provider = None;
         merged
     }
 }

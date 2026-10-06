@@ -802,6 +802,63 @@ fn rebuild_updates_models_and_available() {
 }
 
 #[test]
+fn invalid_provider_catalog_cannot_replace_valid_manager_state() {
+    let raw: toml::Value = toml::from_str(
+        r#"
+        [model_providers.gateway]
+        base_url = "https://provider.example/v1"
+        [model.synthetic]
+        model_provider = "gateway"
+        [models]
+        default = "synthetic"
+    "#,
+    )
+    .unwrap();
+    let cfg = config::Config::new_from_toml_cfg(&raw).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let auth = Arc::new(AuthManager::new(tmp.path(), GrokComConfig::default()));
+    let mgr = ModelsManager::new(
+        None,
+        config::resolve_model_list(&cfg, None).unwrap(),
+        acp::ModelId::new("synthetic"),
+        auth.clone(),
+        cfg.clone(),
+    );
+    let snapshot = || {
+        let cat = mgr.inner.catalog.read();
+        (
+            serde_json::to_value(&*mgr.inner.cfg.read()).unwrap(),
+            serde_json::to_value(&cat.models).unwrap(),
+            serde_json::to_value(&cat.prefetched).unwrap(),
+            cat.etag.clone(),
+            cat.has_fetched_real_catalog,
+            cat.generation,
+            mgr.current_model_id().0.to_string(),
+            mgr.model_switch_generation(),
+            format!("{:?}", *mgr.inner.catalog_progress.borrow()),
+        )
+    };
+    let before = snapshot();
+    let mut invalid = cfg.clone();
+    invalid.model_providers.clear();
+    invalid.models.default = Some("synthetic-new".into());
+    assert!(ModelsManager::from_config(&invalid, Some(IndexMap::new()), auth).is_err());
+    mgr.apply_config(invalid.clone());
+    assert_eq!(snapshot(), before);
+    assert!(mgr.rebuild(&invalid, None).is_err());
+    assert_eq!(snapshot(), before);
+    mgr.rebuild_bundled(&invalid);
+    assert_eq!(snapshot(), before);
+    assert!(!mgr.apply_catalog_fenced(
+        &invalid,
+        make_prefetched(&["synthetic-new"]),
+        Some("synthetic-new-etag".into()),
+        None
+    ));
+    assert_eq!(snapshot(), before);
+}
+
+#[test]
 fn current_reasoning_effort_round_trip() {
     let mgr = test_manager();
     assert_eq!(mgr.current_reasoning_effort(), None);

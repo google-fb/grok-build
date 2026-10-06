@@ -3546,6 +3546,8 @@ fn managed_settings_env_flag(key: &str) -> Option<bool> {
 }
 /// Assemble the final model map. Priority (highest wins):
 /// config.toml `[model.*]` > prefetched (remote) > hardcoded defaults.
+/// Reject unresolved provider references even for in-memory configurations.
+/// A missing provider must never become a default endpoint, with or without a key.
 pub(crate) fn resolve_model_list(
     cfg: &Config,
     prefetched: Option<IndexMap<String, ModelEntry>>,
@@ -3608,12 +3610,14 @@ pub(crate) fn resolve_model_list(
                 );
             }
         }
-        let with_provider = model_override.model_provider.as_deref().map(|pid| {
-            match cfg.model_providers.get(pid) {
-                Some(provider) => model_override.with_provider_defaults(provider, pid),
-                None => model_override.with_missing_provider(),
-            }
-        });
+        let with_provider = if let Some(pid) = model_override.model_provider.as_deref() {
+            let provider = cfg.model_providers.get(pid).ok_or_else(|| format!(
+                "undefined model_provider \"{pid}\" referenced by model.\"{key}\"; model resolution rejected"
+            ))?;
+            Some(model_override.with_provider_defaults(provider, pid))
+        } else {
+            None
+        };
         let effective = with_provider.as_ref().unwrap_or(model_override);
         let mut entry = effective.apply(key, base, &cfg.endpoints);
         let session_bearer_unsafe = !crate::util::is_xai_api_bearer_url(&entry.info.base_url)

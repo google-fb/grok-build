@@ -55,6 +55,30 @@ Connection fields with invalid types are rejected before the tolerant model
 catalog parser can discard them. Unknown model keys without an explicit
 endpoint are rejected as well, since a misspelling can otherwise erase all
 custom routing intent.
+Errors identify `unknown field` separately from `missing endpoint`, without
+printing credential values. This applies to built-in model overrides too.
+
+## Reloading provider configuration
+
+The shared leader watches the global `[model]`, `[models]`, `[model_providers]`,
+and `[auth_provider]` tables. A reload refreshes the model entries and both
+provider maps together, including generated auth helpers from inline provider
+`auth` blocks. Embedded ACP stdio clients can explicitly request
+`_x.ai/internal/reload_models` with `{}`; they do not run the leader's general
+configuration watcher.
+
+New sessions use the refreshed catalog. Reload does not promise to rewrite an
+existing session's captured sampler settings or reroute an in-flight call.
+Invalid referenced provider settings reject the reload before replacing the
+previous valid routing. Model resolution also rejects a missing provider in
+an in-memory configuration: neither own credentials nor
+`allow_xai_credential_fallback` can turn that missing reference into an implicit
+xAI destination. Catalog construction fails, while catalog updates retain the
+previous valid state on this error.
+
+This differs from the existing login-token reload behavior of `auth.json`.
+
+## Provider capabilities
 
 The built-in xAI models use the `xai` profile. A custom model defaults to
 `compatible`; other profiles are `openrouter` and `vllm`. Only `xai` enables
@@ -83,9 +107,10 @@ selecting vLLM alone is not a no-egress guarantee. Auxiliary model routing and
 accounting remain a separate scope.
 
 The TUI `/usage` block supports provider amounts. The optional external status
-line's `cost.total_cost_usd` still projects xAI ticks only; OpenRouter-only usage
-has no amount there, and mixed sessions expose the xAI subtotal rather than a
-combined provider bill. Use terminal/ledger cost sources for provider accounting.
+line's `cost.total_cost_usd` uses all reported sources in the legacy main-agent
+scope and hides partial/incomplete amounts. It does not add auxiliary costs.
+See [request accounting](usage-accounting.md) for the independent session-wide
+request ledger and its completeness signals.
 
 ## Usage and cost
 
@@ -94,8 +119,9 @@ counters. Durable `usage.json` stores full prompt input. Headless result input i
 the disjoint fresh bucket: full input minus cache reads and writes. Reasoning is
 a subset of output, not an additional billable token sum. Missing detail counters
 retain the existing zero default; this is not proof that the service measured
-those details. The ledger still covers the main loop and attributed subagents,
-not every auxiliary request made by the CLI.
+those details. These legacy aggregates cover the main loop and attributed
+subagents. The separate `request_usage` ledger preserves nullable per-request
+counters and separates auxiliary attempts; do not add the overlapping scopes.
 
 Provider-reported money is kept separately from tokens:
 

@@ -192,6 +192,17 @@ api_key = "sk-custom"
 When you override a built-in model, Grok starts with the default configuration (including the correct `base_url`), then applies only the fields you specify. Unspecified fields inherit from the default. A per-model credential must have an
 explicit `base_url` (or inherit explicitly configured custom enterprise endpoints),
 so a misspelled third-party endpoint cannot silently send that credential to xAI.
+Errors distinguish `missing endpoint` from `unknown field` without showing key
+values. A missing provider reference is rejected during model resolution too;
+an own key or an explicit credential-fallback flag cannot bypass that check.
+
+The shared leader refreshes its model catalog when the global model, provider,
+or auth-helper tables change. Provider routes and their auth helpers are loaded
+together for new sessions. Embedded ACP clients must explicitly request a model
+reload. Reload does not promise to replace an existing session's captured sampler
+settings or change an in-flight request; use a new session to apply the refreshed
+catalog. An invalid referenced provider configuration leaves the previous valid
+routing in place.
 
 ### Priority Order
 

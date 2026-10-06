@@ -392,13 +392,12 @@ impl ConfigReloader {
                 .send(ConfigUpdate::Compat(Box::new(new_compat)));
         }
 
-        // Models — compare [model] (BYOK entries) and [models] (default, surprise) tables.
-        // Use toml::Value comparison (covers all fields including nested model entries).
-        let old_model_table = self.last_global_config.get("model");
-        let new_model_table = new_global.get("model");
-        let old_models_table = self.last_global_config.get("models");
-        let new_models_table = new_global.get("models");
-        if old_model_table != new_model_table || old_models_table != new_models_table {
+        // Provider routing and credential helpers participate in model resolution
+        // even when the model entries themselves have not changed.
+        if ["model", "models", "model_providers", "auth_provider"]
+            .iter()
+            .any(|section| self.last_global_config.get(section) != new_global.get(section))
+        {
             info!("model config change detected");
             let _ = self.config_update_tx.send(ConfigUpdate::ModelsChanged);
         }
