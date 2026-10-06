@@ -127,13 +127,13 @@ class ProviderReloadCli(unittest.TestCase):
         cls.binary = Path(os.environ['GROK_TEST_BINARY']).resolve(strict=True)
 
     @contextlib.contextmanager
-    def running(self):
+    def running(self, initial=None):
         with tempfile.TemporaryDirectory(prefix='astra-provider-reload-') as folder:
             root = Path(folder)
             for name in ('home', 'grok', 'work', 'tmp'):
                 (root/name).mkdir()
             path = root/'grok/config.toml'
-            path.write_text(config())
+            path.write_text(initial or config())
             self.requests, self.aux_requests = [], []
             servers, threads = [], []
             rpc = None
@@ -189,6 +189,60 @@ class ProviderReloadCli(unittest.TestCase):
             self.assertNotIn('synthetic-a-key', json.dumps(result))
             rpc.prompt_new()
             self.check_request(1, 28081, 'synthetic-a-key', 'synthetic-model-a')
+
+    def test_new_provider_inline_auth_is_reloaded_with_provider(self):
+        with self.running() as (path, rpc):
+            second = config(port=28181, key='SYNTHETIC_B_KEY', provider='provider-b', model='model-b')
+            second = second.replace('env_key = "SYNTHETIC_B_KEY"\n', '')
+            second += '[model_providers.provider-b.auth]\ncommand = "printf synthetic-b-key"\n'
+            path.write_text(config()+second)
+            rpc.request('_x.ai/internal/reload_models', {})
+            rpc.prompt_new('model-b')
+            self.check_request(1, 28181, 'synthetic-b-key', 'synthetic-model-b')
+
+    def test_named_auth_helper_only_change_is_reloaded(self):
+        initial = config().replace('env_key = "SYNTHETIC_A_KEY"', 'auth_provider = "synthetic"')
+        initial += '[auth_provider.synthetic]\ncommand = "printf synthetic-a-key"\n'
+        with self.running(initial=initial) as (path, rpc):
+            path.write_text(initial.replace('printf synthetic-a-key', 'printf synthetic-b-key'))
+            rpc.request('_x.ai/internal/reload_models', {})
+            rpc.prompt_new()
+            self.check_request(1, 28081, 'synthetic-b-key', 'synthetic-model-a')
+
+    def test_builtin_override_errors_are_distinct_and_make_no_request(self):
+        cases = [('api_key', 'missing endpoint'), ('future_display_hint', 'unknown field')]
+        for field, reason in cases:
+            with self.subTest(field=field), tempfile.TemporaryDirectory(prefix='astra-builtin-error-') as folder:
+                root = Path(folder)
+                for name in ('home', 'grok', 'work', 'tmp'):
+                    (root/name).mkdir()
+                (root/'grok/config.toml').write_text(f'[model.grok-build]\n{field} = "synthetic-do-not-echo"\n')
+                servers, threads = [], []
+                try:
+                    for port in (28081, 28182):
+                        server = protocol.Server(('127.0.0.1', port), protocol.ProbeHandler)
+                        server.requests = []
+                        servers.append(server)
+                        thread = threading.Thread(target=server.serve_forever, daemon=True)
+                        thread.start()
+                        threads.append(thread)
+                    run = subprocess.run([str(self.binary), '-p', 'Synthetic builtin override.',
+                        '--model', 'grok-build', '--output-format', 'json', '--max-turns', '1',
+                        '--disable-web-search'], cwd=root/'work',
+                        env=protocol.isolated_env(root, 'http://127.0.0.1:28182/v1'),
+                        text=True, capture_output=True, timeout=30)
+                    output = run.stdout+run.stderr
+                    self.assertNotEqual(run.returncode, 0, output)
+                    self.assertTrue(all(not server.requests for server in servers))
+                    self.assertNotIn('synthetic-do-not-echo', output)
+                    self.assertIn('grok-build', output)
+                    self.assertIn(reason, output)
+                finally:
+                    for server in servers:
+                        server.shutdown()
+                        server.server_close()
+                    for thread in threads:
+                        thread.join(2)
 
 
 if __name__ == '__main__':

@@ -338,7 +338,7 @@ impl ModelsManager {
                 })
         });
         let has_prefetched = prefetched_models.is_some();
-        let catalog = resolve_model_catalog(cfg, prefetched_models.clone());
+        let catalog = resolve_model_catalog(cfg, prefetched_models.clone())?;
 
         if has_prefetched {
             validate_selectable(cfg, &catalog)?;
@@ -385,7 +385,13 @@ impl ModelsManager {
             return;
         }
         let prefetched = self.inner.catalog.read().prefetched.clone();
-        let new_catalog = resolve_model_catalog(&new_config, prefetched);
+        let new_catalog = match resolve_model_catalog(&new_config, prefetched) {
+            Ok(catalog) => catalog,
+            Err(error) => {
+                tracing::error!(%error, "ignoring config reload: model resolution failed");
+                return;
+            }
+        };
         let has_real_catalog = self.inner.catalog.read().has_fetched_real_catalog;
         if has_real_catalog && let Err(e) = validate_selectable(&new_config, &new_catalog) {
             tracing::error!(error = %e, "ignoring config reload: allowed_models excludes all models");
@@ -678,13 +684,22 @@ impl ModelsManager {
 
     // ── Mutations ───────────────────────────────────────────────────
 
-    fn rebuild(&self, cfg: &config::Config, prefetched: Option<IndexMap<String, ModelEntry>>) {
-        self.inner.catalog.write().models = resolve_model_catalog(cfg, prefetched);
+    fn rebuild(
+        &self,
+        cfg: &config::Config,
+        prefetched: Option<IndexMap<String, ModelEntry>>,
+    ) -> Result<(), String> {
+        let catalog = resolve_model_catalog(cfg, prefetched)?;
+        self.inner.catalog.write().models = catalog;
+        Ok(())
     }
 
     /// Reset to this identity's bundled catalog and reselect a valid default.
     fn rebuild_bundled(&self, cfg: &config::Config) {
-        self.rebuild(cfg, None);
+        if let Err(error) = self.rebuild(cfg, None) {
+            tracing::error!(%error, "keeping catalog: bundled model resolution failed");
+            return;
+        }
         self.reselect_current_model_if_missing(cfg);
     }
 
@@ -1218,10 +1233,17 @@ impl ModelsManager {
                 tracing::info!("model catalog result discarded: identity changed during fetch");
                 return false;
             }
+            let resolved = match resolve_model_catalog(cfg, Some(models.clone())) {
+                Ok(catalog) => catalog,
+                Err(error) => {
+                    tracing::error!(%error, "discarding fetched catalog: model resolution failed");
+                    return false;
+                }
+            };
             let first_real_catalog = !cat.has_fetched_real_catalog;
             cat.has_fetched_real_catalog = true;
             cat.prefetched = Some(models);
-            cat.models = resolve_model_catalog(cfg, cat.prefetched.clone());
+            cat.models = resolved;
             cat.etag = new_etag;
             cat.allowlist_excludes_all = allowlist_matches_nothing(cfg, &cat.models);
             // In the lock: the flag and its mirror can't desync vs `clear()`.

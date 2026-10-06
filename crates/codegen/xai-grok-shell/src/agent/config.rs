@@ -3549,7 +3549,7 @@ fn managed_settings_env_flag(key: &str) -> Option<bool> {
 pub(crate) fn resolve_model_list(
     cfg: &Config,
     prefetched: Option<IndexMap<String, ModelEntry>>,
-) -> IndexMap<String, ModelEntry> {
+) -> Result<IndexMap<String, ModelEntry>, String> {
     let mut resolved: IndexMap<String, ModelEntry> = IndexMap::new();
     if cfg.endpoints.has_custom_endpoint() {
         tracing::info!(
@@ -3706,7 +3706,7 @@ pub(crate) fn resolve_model_list(
     for entry in resolved.values_mut() {
         entry.info.derive_reasoning_effort_fields();
     }
-    resolved
+    Ok(resolved)
 }
 /// Layer 6 of [`resolve_model_list`]: fold the global `[models].extra_headers`
 /// into every model as a base. The presence check is case-insensitive because
@@ -5029,7 +5029,9 @@ pub(crate) fn try_resolve_model_credentials(
     let cfg = Config::new_from_toml_cfg(&raw)
         .map_err(|e| tracing::warn!(error = %e, "config parse failed for credential resolution"))
         .ok()?;
-    let models = resolve_model_list(&cfg, None);
+    let models = resolve_model_list(&cfg, None)
+        .map_err(|error| tracing::warn!(%error, "model credential resolution failed"))
+        .ok()?;
     let entry = find_model_by_id(&models, model_id)?;
     let mut credentials = resolve_credentials(entry, session_key);
     enforce_disable_api_key_auth(
@@ -5107,7 +5109,13 @@ fn with_resolved_model<T>(model_id: &str, f: impl FnOnce(ModelLookup) -> T) -> T
     else {
         return f(ModelLookup::ConfigUnavailable);
     };
-    let models = resolve_model_list(&cfg, None);
+    let models = match resolve_model_list(&cfg, None) {
+        Ok(models) => models,
+        Err(error) => {
+            tracing::warn!(%error, "model auth lookup failed");
+            return f(ModelLookup::ConfigUnavailable);
+        }
+    };
     f(ModelLookup::Loaded(find_model_by_id(&models, model_id)))
 }
 /// Resolve a standalone `SamplerConfig` for an auxiliary model slug (image

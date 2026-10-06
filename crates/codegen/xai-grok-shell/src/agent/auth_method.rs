@@ -796,7 +796,7 @@ mod tests {
         ))
         .unwrap();
         let cfg = Config::new_from_toml_cfg(&toml).expect("config should parse");
-        let models = resolve_model_list(&cfg, None);
+        let models = resolve_model_list(&cfg, None).unwrap();
         let model = models.get(dm).expect("enterprise-style model should exist");
         assert_eq!(
             model.env_key.as_ref().map(|k| k.names()),
@@ -859,7 +859,7 @@ mod tests {
     fn global_external_api_key_advertises_xai_api_key_first() {
         let _set = EnvGuard::set(XAI_API_KEY_ENV_VAR, "xai-external-key");
         let cfg = Config::default();
-        let models = resolve_model_list(&cfg, None);
+        let models = resolve_model_list(&cfg, None).unwrap();
         let has_external_api_key = should_advertise_xai_api_key(false, models.values());
         assert!(has_external_api_key);
         let built = build_auth_methods(AuthMethodsBuildInputs {
@@ -878,7 +878,7 @@ mod tests {
     fn disable_api_key_auth_suppresses_xai_api_key_method() {
         let _set = EnvGuard::set(XAI_API_KEY_ENV_VAR, "xai-external-key");
         let cfg = Config::default();
-        let models = resolve_model_list(&cfg, None);
+        let models = resolve_model_list(&cfg, None).unwrap();
 
         // Flag off: today's behavior (advertised first).
         assert!(should_advertise_xai_api_key(false, models.values()));
@@ -912,7 +912,7 @@ mod tests {
         let _set = EnvGuard::set(XAI_API_KEY_ENV_VAR, "xai-dead-key");
         let _legacy = EnvGuard::unset(LEGACY_XAI_API_KEY_ENV_VAR);
         let cfg = Config::default();
-        let models = resolve_model_list(&cfg, None);
+        let models = resolve_model_list(&cfg, None).unwrap();
         assert!(
             should_advertise_xai_api_key(false, models.values()),
             "presence-only helper still sees the env key"
@@ -933,7 +933,7 @@ mod tests {
     fn env_key_probe_ok_still_advertises() {
         let _set = EnvGuard::set(XAI_API_KEY_ENV_VAR, "xai-live-key");
         let cfg = Config::default();
-        let models = resolve_model_list(&cfg, None);
+        let models = resolve_model_list(&cfg, None).unwrap();
         assert!(should_advertise_xai_api_key_with_env_ok(
             false,
             models.values(),
@@ -961,7 +961,7 @@ mod tests {
         ))
         .unwrap();
         let cfg = Config::new_from_toml_cfg(&toml).expect("config should parse");
-        let models = resolve_model_list(&cfg, None);
+        let models = resolve_model_list(&cfg, None).unwrap();
         assert!(
             should_advertise_xai_api_key_with_env_ok(false, models.values(), false),
             "BYOK must not depend on the first-party env probe"
@@ -979,7 +979,7 @@ mod tests {
         assert_eq!(read_xai_api_key_env().unwrap(), "xai-legacy-key");
 
         let cfg = Config::default();
-        let models = resolve_model_list(&cfg, None);
+        let models = resolve_model_list(&cfg, None).unwrap();
         let has_external_api_key = should_advertise_xai_api_key(false, models.values());
         assert!(has_external_api_key);
     }

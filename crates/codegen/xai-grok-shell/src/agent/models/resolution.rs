@@ -198,8 +198,8 @@ impl ModelGlobSet {
 pub(crate) fn resolve_model_catalog(
     cfg: &config::Config,
     prefetched: Option<IndexMap<String, ModelEntry>>,
-) -> IndexMap<String, ModelEntry> {
-    let mut catalog: IndexMap<String, ModelEntry> = config::resolve_model_list(cfg, prefetched);
+) -> Result<IndexMap<String, ModelEntry>, String> {
+    let mut catalog = config::resolve_model_list(cfg, prefetched)?;
 
     if let Ok(Some(disabled)) = ModelGlobSet::compile(cfg.models.disabled_models.as_ref()) {
         let before = catalog.len();
@@ -253,7 +253,7 @@ pub(crate) fn resolve_model_catalog(
         }
     }
 
-    catalog
+    Ok(catalog)
 }
 
 /// Whether `effort` is a value this model will accept on the wire.

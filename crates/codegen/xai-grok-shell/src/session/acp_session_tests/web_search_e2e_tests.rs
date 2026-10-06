@@ -58,7 +58,7 @@ async fn web_search_uses_model_override_from_config_end_to_end() {
     let web_search_model =
         crate::config::ModelOverrideConfig::resolve(None, None, &raw_config, None).web_search;
     let agent_cfg = crate::agent::config::Config::new_from_toml_cfg(&raw_config).unwrap();
-    let models = crate::agent::config::resolve_model_list(&agent_cfg, None);
+    let models = crate::agent::config::resolve_model_list(&agent_cfg, None).unwrap();
     let entry = models.get(web_search_model.as_str()).unwrap();
     let resolved = crate::agent::config::sampling_config_for_model(
         entry,

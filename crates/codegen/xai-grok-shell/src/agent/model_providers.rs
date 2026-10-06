@@ -432,6 +432,99 @@ mod tests {
     use crate::agent::config::{Config, resolve_credentials, resolve_model_list};
 
     #[test]
+    fn missing_runtime_provider_rejects_catalog_for_every_credential_override() {
+        let mut accepted = Vec::new();
+        for (name, credential) in [
+            ("none", ""),
+            ("static", "api_key = \"synthetic-own-key\""),
+            ("env", "env_key = \"SYNTHETIC_A5_KEY\""),
+            ("helper", "auth_provider = \"synthetic-helper\""),
+        ] {
+            for explicit_endpoint in [false, true] {
+                for allow_fallback in [false, true] {
+                    let endpoint = if explicit_endpoint {
+                        "base_url = \"https://model.example/v1\""
+                    } else {
+                        ""
+                    };
+                    let raw: toml::Value = toml::from_str(&format!(
+                        r#"
+                        [auth_provider.synthetic-helper]
+                        command = "printf synthetic-helper-token"
+                        [model_providers.gateway]
+                        base_url = "https://provider.example/v1"
+                        env_key = "SYNTHETIC_A5_PROVIDER_KEY"
+                        [model.synthetic]
+                        model_provider = "gateway"
+                        allow_xai_credential_fallback = {allow_fallback}
+                        {credential}
+                        {endpoint}
+                    "#
+                    ))
+                    .unwrap();
+                    let mut cfg = Config::new_from_toml_cfg(&raw).unwrap();
+                    assert!(resolve_model_list(&cfg, None).is_ok());
+                    cfg.model_providers.clear();
+                    if resolve_model_list(&cfg, None).is_ok() {
+                        accepted.push((name, explicit_endpoint, allow_fallback));
+                    }
+                }
+            }
+        }
+        assert!(
+            accepted.is_empty(),
+            "missing provider was accepted: {accepted:?}"
+        );
+    }
+
+    #[test]
+    fn builtin_own_key_requires_endpoint_but_plain_defaults_remain_valid() {
+        let plain: toml::Value = toml::from_str("").unwrap();
+        assert!(Config::new_from_toml_cfg(&plain).is_ok());
+        let missing: toml::Value = toml::from_str(
+            r#"
+            [model.grok-build]
+            api_key = "synthetic-do-not-echo"
+        "#,
+        )
+        .unwrap();
+        let error = Config::new_from_toml_cfg(&missing).unwrap_err();
+        assert!(error.contains("base_url"), "{error}");
+        assert!(!error.contains("synthetic-do-not-echo"));
+        let explicit: toml::Value = toml::from_str(
+            r#"
+            [model.grok-build]
+            api_key = "synthetic-own-key"
+            base_url = "https://api.x.ai/v1"
+        "#,
+        )
+        .unwrap();
+        let cfg = Config::new_from_toml_cfg(&explicit).unwrap();
+        let models = resolve_model_list(&cfg, None).unwrap();
+        assert_eq!(models["grok-build"].info.base_url, "https://api.x.ai/v1");
+        assert_eq!(
+            models["grok-build"].api_key.as_deref(),
+            Some("synthetic-own-key")
+        );
+    }
+
+    #[test]
+    fn unknown_model_field_and_missing_endpoint_have_distinct_errors() {
+        let error = |field: &str| {
+            let raw: toml::Value = toml::from_str(&format!("[model.grok-build]\n{field}")).unwrap();
+            Config::new_from_toml_cfg(&raw).unwrap_err()
+        };
+        let unknown = error("future_display_hint = \"synthetic-do-not-echo\"");
+        let missing = error("api_key = \"synthetic-do-not-echo\"");
+        assert!(unknown.contains("unknown field"), "{unknown}");
+        assert!(unknown.contains("future_display_hint"), "{unknown}");
+        assert!(missing.contains("missing endpoint"), "{missing}");
+        assert!(!missing.contains("unknown field"));
+        assert!(!unknown.contains("synthetic-do-not-echo"));
+        assert!(!missing.contains("synthetic-do-not-echo"));
+    }
+
+    #[test]
     #[serial_test::serial]
     fn a3_provider_triplet_uses_configured_key_and_standard_backend() {
         let _key = xai_grok_test_support::EnvGuard::set(
@@ -451,7 +544,7 @@ mod tests {
         )
         .unwrap();
         let cfg = Config::new_from_toml_cfg(&raw).unwrap();
-        let models = resolve_model_list(&cfg, None);
+        let models = resolve_model_list(&cfg, None).unwrap();
         let model = &models["generic-model"];
         let credentials = resolve_credentials(model, Some("synthetic-session-token"));
         assert_eq!(model.info.model, "vendor/model");
@@ -489,7 +582,7 @@ mod tests {
         )
         .unwrap();
         let cfg = Config::new_from_toml_cfg(&raw).unwrap();
-        let models = resolve_model_list(&cfg, None);
+        let models = resolve_model_list(&cfg, None).unwrap();
         let credentials = resolve_credentials(&models["generic-model"], Some("synthetic-session"));
         assert_eq!(credentials.api_key, None);
         assert_eq!(credentials.base_url, "https://provider.example/v1");
@@ -510,7 +603,7 @@ mod tests {
         )
         .unwrap();
         let cfg = Config::new_from_toml_cfg(&raw).unwrap();
-        let models = resolve_model_list(&cfg, None);
+        let models = resolve_model_list(&cfg, None).unwrap();
         for session in [Some("synthetic-session"), None] {
             let credentials = resolve_credentials(&models["direct"], session);
             assert_eq!(credentials.api_key, None);
@@ -543,7 +636,7 @@ mod tests {
                         "[model.direct]\nbase_url = '{endpoint}'\n{env_line}\nmodel = 'vendor/model'"
                     )).unwrap();
                     let cfg = Config::new_from_toml_cfg(&raw).unwrap();
-                    let models = resolve_model_list(&cfg, None);
+                    let models = resolve_model_list(&cfg, None).unwrap();
                     for session in [Some("synthetic-session"), None] {
                         let credentials = resolve_credentials(&models["direct"], session);
                         assert_eq!(
@@ -565,7 +658,7 @@ mod tests {
                 "[model.direct]\nbase_url = 'https://api.x.ai/v1'\napi_base_url = 'https://gateway.example/v1'\nallow_xai_credential_fallback = {allow}"
             )).unwrap();
             let cfg = Config::new_from_toml_cfg(&raw).unwrap();
-            let models = resolve_model_list(&cfg, None);
+            let models = resolve_model_list(&cfg, None).unwrap();
             let credentials = resolve_credentials(&models["direct"], None);
             assert_eq!(
                 credentials.api_key.as_deref(),
@@ -580,7 +673,7 @@ mod tests {
             "[model.gateway]\nbase_url = 'https://gateway.example/v1'\nallow_xai_credential_fallback = true\nprovider_profile = 'xai'"
         ).unwrap();
         let cfg = Config::new_from_toml_cfg(&raw).unwrap();
-        let models = resolve_model_list(&cfg, None);
+        let models = resolve_model_list(&cfg, None).unwrap();
         let credentials = resolve_credentials(&models["gateway"], Some("synthetic-session"));
         assert_eq!(credentials.api_key.as_deref(), Some("synthetic-session"));
     }
@@ -606,7 +699,7 @@ mod tests {
         )
         .unwrap();
         let cfg = Config::new_from_toml_cfg(&raw).unwrap();
-        let models = resolve_model_list(&cfg, None);
+        let models = resolve_model_list(&cfg, None).unwrap();
         let on = &models["enabled"];
         assert!(on.info.supports_reasoning_effort && on.info.supports_backend_search);
         assert_eq!(on.info.stream_tool_calls, Some(true));
@@ -648,7 +741,7 @@ mod tests {
 
         let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
         assert!(cfg.model_providers.contains_key("gateway"));
-        let resolved = resolve_model_list(&cfg, None);
+        let resolved = resolve_model_list(&cfg, None).unwrap();
         let model = resolved.get("via-gateway").expect("model should exist");
         assert_eq!(model.info.base_url, "https://gateway.example/v1");
         assert_eq!(model.info.context_window.get(), 123456);
@@ -685,7 +778,7 @@ mod tests {
         .unwrap();
 
         let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-        let resolved = resolve_model_list(&cfg, None);
+        let resolved = resolve_model_list(&cfg, None).unwrap();
         let model = resolved.get("override-url").expect("model should exist");
         assert_eq!(model.info.base_url, "https://model-specific.example/v1");
         assert_eq!(model.info.context_window.get(), 200000);
@@ -718,7 +811,7 @@ mod tests {
             Some("printf gw-token"),
             "inline auth registers a synthetic provider keyed by the id"
         );
-        let resolved = resolve_model_list(&cfg, None);
+        let resolved = resolve_model_list(&cfg, None).unwrap();
         let model = resolved
             .get("byok-via-gateway")
             .expect("model should exist");
@@ -754,7 +847,7 @@ mod tests {
         .unwrap();
 
         let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-        let resolved = resolve_model_list(&cfg, None);
+        let resolved = resolve_model_list(&cfg, None).unwrap();
         let model = resolved.get("own-key").expect("model should exist");
         assert_eq!(
             model.info.base_url, "https://gateway.example/v1",
@@ -986,7 +1079,7 @@ mod tests {
     fn explicit_connections_and_unused_bad_providers_remain_valid() {
         let empty: toml::Value = toml::from_str("").unwrap();
         let defaults = Config::new_from_toml_cfg(&empty).unwrap();
-        assert!(!resolve_model_list(&defaults, None).is_empty());
+        assert!(!resolve_model_list(&defaults, None).unwrap().is_empty());
         for profile in ["openrouter", "vllm", "compatible", "xai"] {
             let raw: toml::Value = toml::from_str(&format!(
                 r#"
@@ -1002,7 +1095,7 @@ mod tests {
             .unwrap();
             let cfg = Config::new_from_toml_cfg(&raw).unwrap();
             assert!(!cfg.config_warnings.is_empty());
-            let models = resolve_model_list(&cfg, None);
+            let models = resolve_model_list(&cfg, None).unwrap();
             assert_eq!(models["valid"].info.base_url, "https://provider.example/v1");
         }
         let raw: toml::Value = toml::from_str(
@@ -1026,7 +1119,9 @@ mod tests {
         .unwrap();
         let cfg = Config::new_from_toml_cfg(&raw).unwrap();
         assert_eq!(
-            resolve_model_list(&cfg, None)["custom"].info.base_url,
+            resolve_model_list(&cfg, None).unwrap()["custom"]
+                .info
+                .base_url,
             "https://enterprise.example/v1"
         );
     }
@@ -1174,7 +1269,7 @@ mod tests {
         .unwrap();
 
         let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-        let resolved = resolve_model_list(&cfg, None);
+        let resolved = resolve_model_list(&cfg, None).unwrap();
         let model = resolved.get("via-gateway").expect("model should exist");
         let provider = model
             .auth_provider
@@ -1201,7 +1296,7 @@ mod tests {
         .unwrap();
 
         let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-        let resolved = resolve_model_list(&cfg, None);
+        let resolved = resolve_model_list(&cfg, None).unwrap();
         let model = resolved.get("via-gateway").expect("model should exist");
         assert_eq!(
             resolve_credentials(model, Some("session-jwt"))
@@ -1228,7 +1323,7 @@ mod tests {
         .unwrap();
 
         let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-        let resolved = resolve_model_list(&cfg, None);
+        let resolved = resolve_model_list(&cfg, None).unwrap();
         let model = resolved.get("via-gateway").expect("model should exist");
         assert_eq!(
             resolve_credentials(model, Some("session-jwt")).api_key,
@@ -1255,7 +1350,7 @@ mod tests {
         .unwrap();
 
         let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-        let resolved = resolve_model_list(&cfg, None);
+        let resolved = resolve_model_list(&cfg, None).unwrap();
         let model = resolved.get("via-gateway").expect("model should exist");
         assert_eq!(
             model.info.api_backend,
@@ -1286,7 +1381,7 @@ mod tests {
         .unwrap();
 
         let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-        let resolved = resolve_model_list(&cfg, None);
+        let resolved = resolve_model_list(&cfg, None).unwrap();
         let model = resolved.get("own-env").expect("model should exist");
         let effective = model
             .effective_auth_provider()
@@ -1326,7 +1421,7 @@ mod tests {
         .unwrap();
 
         let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-        let resolved = resolve_model_list(&cfg, None);
+        let resolved = resolve_model_list(&cfg, None).unwrap();
         let model = resolved.get("via-gateway").expect("model should exist");
         assert_eq!(
             resolve_credentials(model, Some("session-jwt")).api_key,
@@ -1365,7 +1460,7 @@ mod tests {
         .unwrap();
 
         let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-        let resolved = resolve_model_list(&cfg, None);
+        let resolved = resolve_model_list(&cfg, None).unwrap();
         let model = resolved.get("via-gateway").expect("model should exist");
         assert_eq!(
             model.info.extra_headers.get("X-Model").map(String::as_str),
@@ -1435,7 +1530,7 @@ mod tests {
         )
         .unwrap();
         let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-        let resolved = resolve_model_list(&cfg, None);
+        let resolved = resolve_model_list(&cfg, None).unwrap();
         let provider = resolved["m"]
             .auth_provider
             .as_ref()
@@ -1466,7 +1561,7 @@ mod tests {
         .unwrap();
 
         let cfg = Config::new_from_toml_cfg(&toml_cfg).expect("config should parse");
-        let resolved = resolve_model_list(&cfg, None);
+        let resolved = resolve_model_list(&cfg, None).unwrap();
         let model = resolved.get("via-gateway").expect("model should exist");
         assert_eq!(
             model
@@ -1510,7 +1605,7 @@ mod tests {
         .unwrap();
 
         let cfg = Config::new_from_toml_cfg(&toml_cfg).expect("config should parse");
-        let resolved = resolve_model_list(&cfg, None);
+        let resolved = resolve_model_list(&cfg, None).unwrap();
         let model = resolved.get("via-gateway").expect("model should exist");
         assert_eq!(
             model
