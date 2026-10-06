@@ -139,6 +139,8 @@ mod tests {
 
             [model."{model_id}"]
             model = "{model_id}"
+            base_url = "https://api.x.ai/v1"
+            provider_profile = "xai"
             api_key = "sk-byok"
             "#
         )
@@ -181,6 +183,8 @@ mod tests {
             r#"
             [model."{dm}"]
             model = "{dm}"
+            base_url = "https://api.x.ai/v1"
+            provider_profile = "xai"
             api_key = "sk-byok-inline"
             "#
         ));
@@ -199,6 +203,8 @@ mod tests {
             r#"
             [model."{dm}"]
             model = "{dm}"
+            base_url = "https://api.x.ai/v1"
+            provider_profile = "xai"
             env_key = "{TEST_ENV}"
             "#
         ));
@@ -296,6 +302,8 @@ mod tests {
 
             [model."{dm}"]
             model = "{dm}"
+            base_url = "https://api.x.ai/v1"
+            provider_profile = "xai"
             api_key = "sk-byok"
             "#
         ));
@@ -316,6 +324,8 @@ mod tests {
 
             [model."{dm}"]
             model = "{dm}"
+            base_url = "https://api.x.ai/v1"
+            provider_profile = "xai"
             api_key = "sk-byok"
             "#
         ));
@@ -329,10 +339,12 @@ mod tests {
             r#"
             [model."my-openai"]
             model = "gpt-4o"
+            base_url = "https://provider.example/v1"
             api_key = "sk-first"
 
             [model."my-anthropic"]
             model = "claude"
+            base_url = "https://provider.example/v1"
             api_key = "sk-second"
             "#,
         );
