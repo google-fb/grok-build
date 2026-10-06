@@ -6,6 +6,7 @@ version = "0.1.220-alpha.4"
 description = "Grok tools library"
 
 [dependencies]
+xai-grok-usage = { path = "../xai-grok-usage" }
 anyhow = { workspace = true }
 arc-swap = { workspace = true }
 xai-dirs = { workspace = true }

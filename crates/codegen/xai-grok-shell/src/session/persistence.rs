@@ -287,6 +287,11 @@ pub enum PersistenceMsg {
     Signals(SessionSignals),
     /// Persist the session billing ledger (`usage.json`).
     Usage(xai_chat_state::UsageLedger),
+    UsageAndAck {
+        ledger: xai_chat_state::UsageLedger,
+        respond_to: tokio::sync::oneshot::Sender<io::Result<()>>,
+    },
+    AttachUsageObserver(xai_grok_usage::UsageObserver),
     /// Persist announcement tracking state (MCP + skill announcement dedup).
     AnnouncementState(crate::session::announcement_state::AnnouncementState),
     /// Persist goal mode orchestration state.
@@ -2226,6 +2231,13 @@ impl SessionPersistence {
                     if let Err(e) = self.storage.write_signals(&self.info, &signals).await {
                         tracing::warn!(?e, "failed to write session signals");
                     }
+                }
+                PersistenceMsg::UsageAndAck { ledger, respond_to } => {
+                    let result = self.storage.write_usage(&self.info, &ledger).await;
+                    let _ = respond_to.send(result);
+                }
+                PersistenceMsg::AttachUsageObserver(observer) => {
+                    self.summary.attach_usage_observer(observer);
                 }
                 PersistenceMsg::Usage(ledger) => {
                     if let Err(e) = self.storage.write_usage(&self.info, &ledger).await {

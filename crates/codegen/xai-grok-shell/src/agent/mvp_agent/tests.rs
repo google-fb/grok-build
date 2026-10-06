@@ -1116,6 +1116,8 @@ async fn file_toolset_override_e2e_to_finalized_toolset() {
     def.override_file_tools(file_tools);
     let builder = xai_grok_tools::registry::types::ToolRegistryBuilder::new();
     let ctx = SessionContext {
+        usage_observer: None,
+        web_search_provider_profile: Default::default(),
         backend: std::sync::Arc::new(LocalTerminalBackend::new()),
         fs: std::sync::Arc::new(LocalFs),
         cwd: tmp.path().to_path_buf(),
@@ -1233,6 +1235,7 @@ fn make_test_handle(
         force_compact: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         permission_handle: xai_grok_workspace::permission::PermissionHandle::allow_all(),
         attribution_callback: None,
+        usage_observer: None,
         agent_name: "grok-build".to_string(),
         managed_mcp_proxy_base_url: String::new(),
         session_default_agent_profile: None,
@@ -7092,4 +7095,23 @@ fn init_advertising_status_line(enabled: bool) -> acp::InitializeRequest {
             .terminal(false)
             .meta(meta),
     )
+}
+
+#[test]
+#[serial_test::serial]
+fn subagent_context_uses_live_session_request_observer() {
+    run_local_for_bridge_test(|| async {
+        let (agent, _rx) = build_agent_with_gateway_rx();
+        let sid = acp::SessionId::new("request-observer-parent");
+        let (mut handle, _tx, _cmd_rx) = make_live_session_handle(&sid, None);
+        handle.usage_observer = Some(
+            handle
+                .chat_state_handle
+                .usage_observer(sid.to_string(), std::sync::Arc::new(|| None)),
+        );
+        agent.insert_resident(&sid, handle);
+        let ctx = agent.build_subagent_spawn_context(sid.0.as_ref());
+        assert!(ctx.sampling_config.usage_observer.is_none());
+        assert!(ctx.usage_observer.is_some());
+    });
 }

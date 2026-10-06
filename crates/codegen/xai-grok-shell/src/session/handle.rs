@@ -167,6 +167,7 @@ pub struct SessionHandle {
     /// rather than getting a fresh one (preserving the parent's
     /// session_id on the child's emits).
     pub attribution_callback: Option<xai_grok_sampler::SharedAttributionCallback>,
+    pub usage_observer: Option<xai_grok_usage::UsageObserver>,
     /// The agent definition name for this session.
     pub agent_name: String,
     pub managed_mcp_proxy_base_url: String,

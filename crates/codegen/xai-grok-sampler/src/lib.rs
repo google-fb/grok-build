@@ -31,6 +31,7 @@ pub mod sampling_log;
 mod shared_http;
 pub mod stream;
 pub mod types;
+mod usage_observation;
 
 // Public re-exports — the API surface consumers see.
 pub use actor::SamplerActor;

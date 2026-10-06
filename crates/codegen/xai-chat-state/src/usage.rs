@@ -180,9 +180,40 @@ pub struct UsageLedger {
     pub main_loop_model_calls: u64,
     /// Bill may under-count (drain timeout, nested subagent incomplete, apply failure).
     pub incomplete: bool,
+    /// Session-wide physical requests; independent of the legacy accepted-call totals.
+    /// Missing in historical files means the earlier request history is unknown.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_request_usage"
+    )]
+    pub request_usage: Option<xai_grok_usage::CallLedger>,
+}
+
+/// A versioned extension must not invalidate the independent legacy bill.
+/// Consume the entire JSON value before parsing so an unsupported schema,
+/// unknown enum variant, or wrong field type only invalidates this extension.
+fn deserialize_request_usage<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<xai_grok_usage::CallLedger>, D::Error> {
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.map(|value| {
+        serde_json::from_value(value).unwrap_or_else(|_| {
+            let mut ledger = xai_grok_usage::CallLedger::new(false);
+            ledger.recording_errors = 1;
+            ledger
+        })
+    }))
 }
 
 impl UsageLedger {
+    /// Only creation of a brand-new session can assert complete request history.
+    pub fn new_recorded_session() -> Self {
+        Self {
+            request_usage: Some(xai_grok_usage::CallLedger::new(true)),
+            ..Self::default()
+        }
+    }
+
     /// Fold one main-agent-loop model call. This is the only writer of
     /// `main_loop_model_calls` (the wire `numTurns`); side calls such as
     /// compaction must not use it.
@@ -406,5 +437,91 @@ mod tests {
     fn missing_usage_json_fields_deserialize_as_empty_ledger() {
         let restored: UsageLedger = serde_json::from_str("{}").expect("empty object");
         assert_eq!(restored, UsageLedger::default());
+    }
+
+    #[test]
+    fn request_extension_parse_errors_preserve_legacy_fields_and_completeness() {
+        use serde_json::json;
+        // Include errors nested inside a syntactically valid ledger, not just
+        // errors at the envelope boundary. Standalone CallLedger stays strict.
+        let call = xai_grok_usage::CallRecord {
+            call_id: "synthetic-call".into(),
+            origin_session_id: "synthetic-session".into(),
+            prompt_id: None,
+            model: "synthetic-model".into(),
+            provider: xai_grok_usage::ProviderProfile::Openrouter,
+            backend: xai_grok_usage::CallBackend::ChatCompletions,
+            purpose: xai_grok_usage::CallPurpose::MainLoop,
+            status: xai_grok_usage::CallStatus::Completed,
+            started_at_unix_ms: 1,
+            api_duration_ms: Some(7),
+            sequence: 2,
+            usage: None,
+        };
+        let mut request_ledger = xai_grok_usage::CallLedger::new(true);
+        request_ledger.upsert(call);
+        let valid = serde_json::to_value(&request_ledger).unwrap();
+        let mut schema = valid.clone();
+        schema["schema_version"] = json!(2);
+        let mut purpose = valid.clone();
+        purpose["calls"][0]["purpose"] = json!("future-purpose");
+        let mut backend = valid.clone();
+        backend["calls"][0]["backend"] = json!("future-backend");
+        let mut calls = valid;
+        calls["calls"] = json!("invalid-call-list");
+        for invalid in [schema, purpose, backend, calls, json!(false)] {
+            for incomplete in [false, true] {
+                let mut old = UsageLedger::default();
+                old.record_provider_call(
+                    "synthetic-model",
+                    &tu(100, 10),
+                    Some(7),
+                    None,
+                    Some(ProviderCost {
+                        usd: 0.01,
+                        source: CostSource::OpenrouterUsageCost,
+                    }),
+                );
+                old.incomplete = incomplete;
+                let mut value = serde_json::to_value(&old).unwrap();
+                value["request_usage"] = invalid.clone();
+                // Exercise the streaming JSON deserializer used by storage.
+                let mut loaded: UsageLedger = serde_json::from_str(&value.to_string()).unwrap();
+                let requests = loaded.request_usage.take().unwrap();
+                assert_eq!(loaded, old);
+                assert!(!requests.history_complete);
+                assert_eq!(requests.recording_errors, 1);
+                assert!(requests.summary().all.usage_is_incomplete);
+                assert_eq!(requests.summary().all.cost.total_usd, None);
+                assert_eq!(requests.summary().all.total_tokens.total, None);
+                let restored: xai_grok_usage::CallLedger =
+                    serde_json::from_value(serde_json::to_value(requests).unwrap()).unwrap();
+                assert!(!restored.history_complete);
+                assert_eq!(restored.recording_errors, 1);
+            }
+        }
+    }
+
+    #[test]
+    fn request_extension_absence_null_and_valid_history_keep_their_meanings() {
+        let old = UsageLedger::default();
+        let mut value = serde_json::to_value(&old).unwrap();
+        assert_eq!(
+            serde_json::from_value::<UsageLedger>(value.clone()).unwrap(),
+            old
+        );
+        value["request_usage"] = serde_json::Value::Null;
+        assert_eq!(serde_json::from_value::<UsageLedger>(value).unwrap(), old);
+        let fresh = UsageLedger::new_recorded_session();
+        assert_eq!(
+            serde_json::from_str::<UsageLedger>(&serde_json::to_string(&fresh).unwrap()).unwrap(),
+            fresh
+        );
+        // This narrow recovery does not forgive corrupt legacy data or JSON.
+        assert!(
+            serde_json::from_str::<UsageLedger>(r#"{"totals":false,"request_usage":false}"#)
+                .is_err()
+        );
+        assert!(serde_json::from_str::<UsageLedger>(r#"{"request_usage":"#).is_err());
     }
 }

@@ -29,6 +29,7 @@ default-bazel = [
 ]
 
 [dependencies]
+xai-grok-usage = { path = "../xai-grok-usage" }
 dunce = { workspace = true }
 tonic-prost = { workspace = true, optional = true }
 agent-client-protocol = { workspace = true }

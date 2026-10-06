@@ -3286,3 +3286,20 @@ async fn progress_publisher_delivers_ticks_to_parent_cmd_channel() {
         })
         .await;
 }
+
+#[tokio::test]
+async fn request_observer_survives_live_inherit_fallback_and_model_override() {
+    let mut ctx = ctx_with_toggle(HashMap::new());
+    assert!(ctx.sampling_config.usage_observer.is_none(), "baseline agent config is not the live observer source");
+    ctx.usage_observer = Some(xai_chat_state::ChatStateHandle::noop().usage_observer(
+        "live-parent".into(), std::sync::Arc::new(|| None),
+    ));
+    let (fallback, _) = read_parent_sampling_config(&ctx).await;
+    assert!(fallback.usage_observer.is_some());
+    ctx.parent_chat_state = Some(spawn_test_parent_chat_state("parent-model"));
+    let (live, _) = read_parent_sampling_config(&ctx).await;
+    assert!(live.usage_observer.is_some());
+    ctx.available_models.insert("pinned".into(), test_model_entry("pinned-model"));
+    let (pinned, _) = resolve_model_override_to_config("pinned", &ctx).unwrap();
+    assert!(pinned.usage_observer.is_some());
+}

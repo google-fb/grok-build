@@ -146,6 +146,7 @@ fn classify_sampling_error(err: SamplingError) -> CompactFailure {
     let deterministic = match &err {
         SamplingError::Auth { .. }
         | SamplingError::InvalidConfiguration(_)
+        | SamplingError::UsageCheckpoint
         | SamplingError::Serialization(_)
         | SamplingError::IdleTimeout { .. } => true,
         SamplingError::Api {
@@ -487,6 +488,7 @@ pub(crate) async fn generate_session_compact(
     tool_choice: crate::util::config::CompactionToolChoice,
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<CompactOutput, CompactFailure> {
+    let client = client.with_usage_purpose(xai_grok_usage::CallPurpose::Compaction);
     if cancel.is_cancelled() {
         return Err(CompactFailure::Cancelled);
     }

@@ -250,6 +250,8 @@ pub(super) struct ResultLine {
     pub(super) total_cost_usd_ticks: Option<i64>,
     pub(super) cost_sources: Value,
     pub(super) cost_unit: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) session_requests: Option<Value>,
     pub(super) usage_is_incomplete: bool,
     pub(super) cost_is_partial: bool,
     pub(super) usage: MessageUsage,

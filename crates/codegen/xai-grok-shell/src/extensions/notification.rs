@@ -83,6 +83,14 @@ pub struct SessionNotification {
 /// and duration; nullable money carries explicit source metadata.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PromptUsage {
+    /// Session-wide physical requests, including auxiliaries and child sessions.
+    /// This does not change the prompt-scoped legacy aggregate fields below.
+    #[serde(
+        default,
+        rename = "sessionRequests",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub session_requests: Option<xai_grok_usage::CallLedger>,
     #[serde(flatten)]
     pub totals: PromptUsageModel,
     #[serde(
@@ -289,6 +297,7 @@ impl From<&xai_chat_state::UsageLedger> for PromptUsage {
                 .collect(),
             num_turns: ledger.main_loop_model_calls,
             usage_is_incomplete: ledger.incomplete,
+            session_requests: ledger.request_usage.clone(),
         };
         usage.scrub_untrustworthy_costs();
         usage
@@ -351,6 +360,9 @@ pub fn reported_cost_usd(row: &PromptUsageModel) -> Option<f64> {
 }
 
 pub(crate) fn project_result_usage(result: &mut serde_json::Value, usage: &PromptUsage) {
+    if let Some(requests) = &usage.session_requests {
+        result["session_requests"] = serde_json::json!(requests);
+    }
     result["total_cost_usd"] = serde_json::Value::Null;
     result["total_cost_usd_ticks"] = serde_json::Value::Null;
     result["cost_sources"] = serde_json::json!([]);
@@ -2487,6 +2499,7 @@ mod tests {
             },
         );
         let partial = PromptUsage {
+            session_requests: None,
             totals: PromptUsageModel {
                 input_tokens: 100,
                 cached_read_tokens: 40,
@@ -2517,6 +2530,7 @@ mod tests {
         );
 
         let mut incomplete = PromptUsage {
+            session_requests: None,
             totals: PromptUsageModel {
                 input_tokens: 50,
                 output_tokens: 5,
@@ -2642,6 +2656,7 @@ mod tests {
     #[test]
     fn scrub_untrustworthy_costs_clears_ticks_when_partial() {
         let mut usage = PromptUsage {
+            session_requests: None,
             totals: PromptUsageModel {
                 input_tokens: 10,
                 output_tokens: 1,
@@ -2676,6 +2691,7 @@ mod tests {
             },
         );
         let usage = PromptUsage {
+            session_requests: None,
             totals: PromptUsageModel {
                 input_tokens: 100,
                 cached_read_tokens: 40,

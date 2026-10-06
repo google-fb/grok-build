@@ -106,6 +106,7 @@ mod tests {
             user_id: None,
             client_version: None,
             attribution_callback: None,
+            usage_observer: None,
             bearer_resolver: None,
             supports_backend_search: false,
             compactions_remaining: None,

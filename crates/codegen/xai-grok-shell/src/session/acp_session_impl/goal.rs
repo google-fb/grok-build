@@ -127,7 +127,12 @@ impl SessionActor {
                 active_model.clone(),
                 &session_id,
             );
-            let response = match client.conversation_collect(request).await {
+            let response = match client
+                .clone()
+                .with_usage_purpose(xai_grok_usage::CallPurpose::Goal)
+                .conversation_collect(request)
+                .await
+            {
                 Ok(response) => response,
                 Err(error) => {
                     let _ = self

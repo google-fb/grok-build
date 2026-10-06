@@ -44,6 +44,8 @@ async fn tool_bridge_routes_writes_through_injected_fs() {
         behavior_preset: None,
     };
     let ctx = SessionContext {
+        usage_observer: None,
+        web_search_provider_profile: Default::default(),
         backend: terminal,
         fs,
         cwd: cwd.clone(),

@@ -301,6 +301,7 @@ pub(crate) struct SubagentSpawnContext {
     /// goes through `agent/config.rs::sampling_config_for_model`
     /// which always sets that field to `None`.
     pub attribution_callback: Option<xai_grok_sampler::SharedAttributionCallback>,
+    pub usage_observer: Option<xai_grok_usage::UsageObserver>,
     /// Parent session's agent name (e.g. "grok-build").
     pub parent_agent_name: Option<String>,
     /// `agent_type` of the parent's current model — the harness-flavor fallback
@@ -765,6 +766,7 @@ async fn read_parent_sampling_config(
                 &cfg.base_url,
             );
             let inherited = xai_grok_sampler::SamplerConfig {
+                usage_observer: ctx.usage_observer.clone(),
                 provider_profile,
                 api_key: creds.api_key,
                 base_url: cfg.base_url,
@@ -838,6 +840,7 @@ async fn read_parent_sampling_config(
         })),
     );
     let mut fallback = ctx.sampling_config.clone();
+    fallback.usage_observer = ctx.usage_observer.clone();
     fallback.bearer_resolver = if ctx.would_strip_fallback_key(fallback.api_key.as_deref()) {
         None
     } else {
@@ -900,6 +903,7 @@ fn resolve_model_override_to_config(
         ctx.sampling_config.deployment_id.clone(),
         ctx.sampling_config.user_id.clone(),
     );
+    config.usage_observer = ctx.usage_observer.clone();
     config.bearer_resolver = if !ctx.would_strip_fallback_key(config.api_key.as_deref())
         && resolved_auth_type == xai_chat_state::AuthType::SessionToken
     {

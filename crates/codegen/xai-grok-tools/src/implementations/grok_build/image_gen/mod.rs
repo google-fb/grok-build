@@ -65,6 +65,7 @@ pub struct ImageGenClient {
     /// Imagine API emits an `auth_401_attribution` event with
     /// `consumer == "ImageGen"` for unified auth-failure telemetry.
     attribution_callback: Option<SharedAttributionCallback>,
+    usage_observer: Option<xai_grok_usage::UsageObserver>,
     /// When `true`, the user is on a tier the Imagine server zero-limits
     /// (free / X Basic). `image_gen` / `image_edit` short-circuit before any
     /// HTTP call and return the SuperGrok upsell prose instead. See
@@ -77,6 +78,31 @@ pub struct ImageGenClient {
 }
 
 impl ImageGenClient {
+    pub(crate) async fn send_observed(
+        &self,
+        request: reqwest::RequestBuilder,
+        model: &str,
+        purpose: xai_grok_usage::CallPurpose,
+    ) -> Result<reqwest::Response, xai_grok_usage::http::RequestError> {
+        if let Some(observer) = &self.usage_observer {
+            xai_grok_usage::http::JsonRequestObserver {
+                observer: observer.for_purpose(purpose),
+                model: model.to_owned(),
+                provider: xai_grok_usage::ProviderProfile::Xai,
+                backend: xai_grok_usage::CallBackend::Images,
+            }
+            .send(request)
+            .await
+        } else {
+            Ok(request.send().await?)
+        }
+    }
+
+    pub fn with_usage_observer(mut self, observer: Option<xai_grok_usage::UsageObserver>) -> Self {
+        self.usage_observer = observer;
+        self
+    }
+
     pub fn new(
         config: &ImageGenConfig,
         api_key_provider: Option<SharedApiKeyProvider>,
@@ -159,6 +185,7 @@ impl ImageGenClient {
             writer: super::storage::SessionFileWriter::new(DEFAULT_IMAGE_DIR, "jpg"),
             api_key_provider,
             attribution_callback: None,
+            usage_observer: None,
             tier_restricted: *tier_restricted,
             session_header: None,
             defaults_have_session_header,
@@ -254,11 +281,18 @@ impl ImageGenClient {
         let sent_bearer = self.current_bearer().await;
         let req = self.post_json(&url, &payload, sent_bearer.as_deref());
 
-        let response = req.send().await.map_err(|e| {
-            xai_tool_runtime::ToolError::invalid_arguments(format!(
-                "Image generation API request failed: {e}"
-            ))
-        })?;
+        let response = self
+            .send_observed(
+                req,
+                &self.model,
+                xai_grok_usage::CallPurpose::ImageGeneration,
+            )
+            .await
+            .map_err(|e| {
+                xai_tool_runtime::ToolError::invalid_arguments(format!(
+                    "Image generation API request failed: {e}"
+                ))
+            })?;
 
         let status = response.status();
         if status == reqwest::StatusCode::UNAUTHORIZED {

@@ -98,7 +98,13 @@ impl SessionActor {
             )
             .await;
 
-        let response = match setup.client.conversation_collect(request).await {
+        let response = match setup
+            .client
+            .clone()
+            .with_usage_purpose(xai_grok_usage::CallPurpose::TurnSummary)
+            .conversation_collect(request)
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!(error = %e, "turn summary: model call failed");

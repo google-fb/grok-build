@@ -764,6 +764,7 @@ pub(crate) struct SessionActor {
     /// session was spawned without an `AuthManager` (BYOK direct
     /// mode, test fixtures).
     pub(crate) attribution_callback: Option<xai_grok_sampler::SharedAttributionCallback>,
+    pub(crate) usage_observer: Option<xai_grok_usage::UsageObserver>,
     /// Auth manager. Owns the token refresher internally (via
     /// `configure_refresher()`) and is also used for non-sampler
     /// 401 attribution sites: the sampler-side path goes through

@@ -151,6 +151,7 @@ pub struct VideoGenClient {
     /// `consumer` of `"VideoGen.start"` (start request) or
     /// `"VideoGen.poll"` (poll request) for unified auth-failure telemetry.
     attribution_callback: Option<SharedAttributionCallback>,
+    usage_observer: Option<xai_grok_usage::UsageObserver>,
     /// When `true`, the user is on a tier the Imagine server zero-limits
     /// (free / X Basic). The video tools short-circuit before any HTTP call
     /// and return the SuperGrok upsell prose. See [`VideoGenClient::is_tier_restricted`].
@@ -164,6 +165,30 @@ pub struct VideoGenClient {
 }
 
 impl VideoGenClient {
+    async fn send_observed(
+        &self,
+        request: reqwest::RequestBuilder,
+        model: &str,
+    ) -> Result<reqwest::Response, xai_grok_usage::http::RequestError> {
+        if let Some(observer) = &self.usage_observer {
+            xai_grok_usage::http::JsonRequestObserver {
+                observer: observer.for_purpose(xai_grok_usage::CallPurpose::VideoGeneration),
+                model: model.to_owned(),
+                provider: xai_grok_usage::ProviderProfile::Xai,
+                backend: xai_grok_usage::CallBackend::Videos,
+            }
+            .send(request)
+            .await
+        } else {
+            Ok(request.send().await?)
+        }
+    }
+
+    pub fn with_usage_observer(mut self, observer: Option<xai_grok_usage::UsageObserver>) -> Self {
+        self.usage_observer = observer;
+        self
+    }
+
     pub fn new(
         config: &VideoGenConfig,
         api_key_provider: Option<SharedApiKeyProvider>,
@@ -254,6 +279,7 @@ impl VideoGenClient {
                 .filter(ZdrVideoOutputS3Config::is_valid),
             api_key_provider,
             attribution_callback: None,
+            usage_observer: None,
             tier_restricted: *tier_restricted,
             zdr_restricted: *zdr_restricted,
             session_header: None,
@@ -365,7 +391,7 @@ impl VideoGenClient {
             .timeout(std::time::Duration::from_secs(VIDEO_START_TIMEOUT_SECS))
             .json(&payload);
 
-        let response = req.send().await.map_err(|e| {
+        let response = self.send_observed(req, model).await.map_err(|e| {
             xai_tool_runtime::ToolError::invalid_arguments(format!(
                 "Video generation API request failed: {e}"
             ))

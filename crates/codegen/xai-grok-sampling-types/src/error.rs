@@ -158,6 +158,9 @@ pub enum SamplingError {
     },
     #[error("invalid client configuration: {0}")]
     InvalidConfiguration(&'static str),
+    /// Local accounting failure: retrying could issue another billable request.
+    #[error("provider usage checkpoint could not be saved")]
+    UsageCheckpoint,
     #[error("request error: {0}")]
     Http(reqwest::Error),
     #[error("{prefix}{0}", prefix = SERIALIZATION_DISPLAY_PREFIX)]
@@ -397,6 +400,7 @@ impl SamplingError {
             SamplingError::Api { .. }
             | SamplingError::Auth { .. }
             | SamplingError::InvalidConfiguration(_)
+            | SamplingError::UsageCheckpoint
             | SamplingError::Http(_)
             | SamplingError::Serialization(_)
             | SamplingError::EventStreamError(_)
@@ -410,7 +414,7 @@ impl SamplingError {
     pub fn is_retryable(&self) -> bool {
         match self {
             SamplingError::Auth { .. } => false,
-            SamplingError::InvalidConfiguration(_) => false,
+            SamplingError::InvalidConfiguration(_) | SamplingError::UsageCheckpoint => false,
             SamplingError::Http(err) => is_retryable_reqwest(err),
             SamplingError::Serialization(_) => false,
             SamplingError::Api { status, .. } => is_retryable_api_status(*status),

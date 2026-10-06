@@ -5186,3 +5186,113 @@ async fn repair_history_command_refused_while_turn_active() {
         .unwrap();
     assert_eq!(report.stripped_tool_result_ids, vec!["call_ORPHAN"]);
 }
+
+#[tokio::test]
+async fn request_usage_waits_for_disk_ack_and_failure_does_not_change_legacy_totals() {
+    use xai_grok_usage::{CallBackend, CallGuard, CallPurpose, CallStatus, ProviderProfile};
+    let (mock, receiver, mut acks) = MockChatPersistence::new_with_manual_usage_ack();
+    let h = TestHarness::with_persistence_and_usage(
+        vec![],
+        test_config(),
+        mock,
+        receiver,
+        crate::usage::UsageLedger::new_recorded_session(),
+    );
+    let observer = h
+        .handle
+        .usage_observer(
+            "session".into(),
+            std::sync::Arc::new(|| Some("prompt-a".into())),
+        )
+        .for_purpose(CallPurpose::MainLoop);
+    let task = tokio::spawn(async move {
+        CallGuard::start(
+            Some(&observer),
+            "model",
+            ProviderProfile::Openrouter,
+            CallBackend::ChatCompletions,
+        )
+        .await
+    });
+    let ack = acks.recv().await.unwrap();
+    assert!(
+        !task.is_finished(),
+        "in-memory acceptance is not a durable ack"
+    );
+    let pending = h.handle.try_get_session_usage().await.unwrap();
+    assert_eq!(
+        pending.request_usage.as_ref().unwrap().calls()[0].status,
+        CallStatus::Pending
+    );
+    ack.send(Ok(())).unwrap();
+    let mut call = task.await.unwrap().unwrap();
+    let task = tokio::spawn(async move {
+        let result = call
+            .usage(&serde_json::json!({"prompt_tokens":5,"completion_tokens":2,"cost":0.04}))
+            .await;
+        (call, result)
+    });
+    let ack = acks.recv().await.unwrap();
+    assert!(!task.is_finished());
+    ack.send(Err(std::io::Error::other("synthetic disk failure")))
+        .unwrap();
+    let (call, result) = task.await.unwrap();
+    assert!(result.is_err());
+    drop(call);
+    let ledger = h.handle.try_get_session_usage().await.unwrap();
+    assert_eq!(
+        ledger.totals.model_calls, 0,
+        "physical attempts never fold into the accepted main aggregate"
+    );
+    assert_eq!(ledger.main_loop_model_calls, 0);
+    let requests = ledger.request_usage.unwrap();
+    assert_eq!(requests.recording_errors, 1);
+    assert_eq!(requests.calls()[0].status, CallStatus::Interrupted);
+    assert_eq!(requests.calls()[0].prompt_id.as_deref(), Some("prompt-a"));
+    assert_eq!(requests.summary().main.cost.known_usd, Some(0.04));
+    assert_eq!(requests.summary().main.cost.total_usd, None);
+}
+
+#[tokio::test]
+async fn resumed_legacy_request_history_stays_unknown_and_observers_are_weak() {
+    use xai_grok_usage::{CallBackend, CallGuard, CallStatus, ProviderProfile};
+    let h = TestHarness::new();
+    let observer = h
+        .handle
+        .usage_observer("legacy-session".into(), std::sync::Arc::new(|| None));
+    let mut call = CallGuard::start(
+        Some(&observer),
+        "aux",
+        ProviderProfile::Openrouter,
+        CallBackend::ChatCompletions,
+    )
+    .await
+    .unwrap();
+    call.usage(&serde_json::json!({"prompt_tokens":3,"completion_tokens":2,"cost":0}))
+        .await
+        .unwrap();
+    call.finish(CallStatus::Completed).await.unwrap();
+    let ledger = h.handle.try_get_session_usage().await.unwrap();
+    let requests = ledger.request_usage.unwrap();
+    assert!(!requests.history_complete);
+    assert_eq!(
+        requests.summary().auxiliary.total_tokens.known_total,
+        Some(5)
+    );
+    assert_eq!(requests.summary().auxiliary.total_tokens.total, None);
+    h._cancellation_token.cancel();
+    // Query barrier observes closure, independent of scheduler timing.
+    while h.handle.try_get_session_usage().await.is_ok() {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        CallGuard::start(
+            Some(&observer),
+            "after-close",
+            ProviderProfile::Xai,
+            CallBackend::Responses
+        )
+        .await
+        .is_err()
+    );
+}

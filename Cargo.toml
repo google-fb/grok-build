@@ -68,6 +68,7 @@ members = [
     "crates/codegen/xai-grok-tools",
     "crates/codegen/xai-grok-tools-api",
     "crates/codegen/xai-grok-update",
+    "crates/codegen/xai-grok-usage",
     "crates/codegen/xai-grok-version",
     "crates/codegen/xai-grok-voice",
     "crates/codegen/xai-grok-workspace",

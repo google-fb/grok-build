@@ -122,6 +122,8 @@ pub(crate) struct AgentRebuildSpec {
     pub plugin_registry: Option<Arc<xai_grok_agent::plugins::PluginRegistry>>,
     pub api_key_provider: Option<SharedApiKeyProvider>,
     pub attribution_callback: Option<xai_grok_tools::SharedAttributionCallback>,
+    pub usage_observer: Option<xai_grok_usage::UsageObserver>,
+    pub web_search_provider_profile: xai_grok_usage::ProviderProfile,
     pub tool_params_json: ResolvedToolParamsJson,
     pub subagent_event_tx: Option<UnboundedSender<SubagentEvent>>,
     pub subagent_coordinator_sender: Option<
@@ -235,6 +237,8 @@ impl AgentRebuildSpec {
             plugin_registry,
             api_key_provider,
             attribution_callback,
+            usage_observer,
+            web_search_provider_profile,
             tool_params_json,
             subagent_event_tx,
             subagent_coordinator_sender,
@@ -331,6 +335,9 @@ impl AgentRebuildSpec {
         }
         if let Some(api_key_provider) = api_key_provider.clone() {
             builder = builder.with_api_key_provider(api_key_provider);
+        }
+        if let Some(observer) = usage_observer.clone() {
+            builder = builder.with_usage_observer(observer, *web_search_provider_profile);
         }
         if let Some(attribution_callback) = attribution_callback.clone() {
             builder = builder.with_attribution_callback(attribution_callback);
@@ -485,6 +492,8 @@ pub(crate) fn test_rebuild_spec_default() -> Arc<AgentRebuildSpec> {
         plugin_registry: None,
         api_key_provider: None,
         attribution_callback: None,
+        usage_observer: None,
+        web_search_provider_profile: Default::default(),
         tool_params_json: ResolvedToolParamsJson::default(),
         subagent_event_tx: None,
         subagent_coordinator_sender: None,

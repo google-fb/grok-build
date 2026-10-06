@@ -115,6 +115,8 @@ pub struct AgentBuilder {
     context_window_tokens: Option<u64>,
     api_key_provider: Option<xai_grok_tools::types::SharedApiKeyProvider>,
     attribution_callback: Option<xai_grok_tools::SharedAttributionCallback>,
+    usage_observer: Option<xai_grok_usage::UsageObserver>,
+    web_search_provider_profile: xai_grok_usage::ProviderProfile,
     /// Session-scoped MCP tool-result inline cap (bytes). When `Some`, seeded
     /// into the toolset's `TruncationCfg` resource after finalize, where the
     /// MCP truncation path consults it before the process-global cap. The
@@ -253,6 +255,8 @@ impl AgentBuilder {
             context_window_tokens: None,
             api_key_provider: None,
             attribution_callback: None,
+            usage_observer: None,
+            web_search_provider_profile: Default::default(),
             mcp_max_output_bytes: None,
             system_reminder_tag: xai_grok_tools::reminders::DEFAULT_REMINDER_TAG,
             persisted_announced_skill_names: None,
@@ -524,6 +528,16 @@ impl AgentBuilder {
     /// `xai_grok_sampler::SamplerConfig::attribution_callback` so
     /// all 401s share the same `AuthManager` reference and land in
     /// the same Axiom dataset.
+    pub fn with_usage_observer(
+        mut self,
+        observer: xai_grok_usage::UsageObserver,
+        web_search_provider: xai_grok_usage::ProviderProfile,
+    ) -> Self {
+        self.usage_observer = Some(observer);
+        self.web_search_provider_profile = web_search_provider;
+        self
+    }
+
     pub fn with_attribution_callback(
         mut self,
         callback: xai_grok_tools::SharedAttributionCallback,
@@ -1095,6 +1109,8 @@ impl AgentBuilder {
                 api_key_provider: self.api_key_provider,
                 auth_provider: None,
                 attribution_callback: self.attribution_callback,
+                usage_observer: self.usage_observer,
+                web_search_provider_profile: self.web_search_provider_profile,
                 system_reminder_tag: self.system_reminder_tag,
             },
         )

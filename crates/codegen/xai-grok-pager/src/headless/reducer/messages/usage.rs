@@ -12,6 +12,7 @@ use super::wire::{MessageUsage, ModelUsage, ServerToolUse};
 
 /// The reshaped terminal usage: `message.usage`, `modelUsage`, turn count, cost, and API duration.
 pub(super) struct ResultUsage {
+    pub(super) session_requests: Option<Value>,
     pub(super) usage: MessageUsage,
     pub(super) model_usage: Value,
     pub(super) num_turns: u64,
@@ -89,6 +90,7 @@ impl MessagesReducer {
             self.session.as_ref().and_then(|s| s.context_window),
         );
         ResultUsage {
+            session_requests: scratch.get("session_requests").cloned(),
             usage,
             model_usage,
             num_turns,

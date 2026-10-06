@@ -120,6 +120,7 @@ pub(crate) fn map_sampling_err_to_acp(err: SamplingError) -> acp::Error {
     match err {
         SamplingError::Auth { message, .. } => acp::Error::auth_required().data(message),
         SamplingError::InvalidConfiguration(msg) => acp::Error::invalid_params().data(msg),
+        SamplingError::UsageCheckpoint => acp::Error::internal_error().data(err.to_string()),
         SamplingError::Http(e) => {
             acp::Error::internal_error().data(format!("http client init failed: {e}"))
         }
@@ -487,6 +488,7 @@ mod tests {
     #[test]
     fn attach_prompt_usage_keeps_string_message_readable() {
         let usage = crate::extensions::notification::PromptUsage {
+            session_requests: None,
             totals: Default::default(),
             model_usage: Default::default(),
             num_turns: 1,

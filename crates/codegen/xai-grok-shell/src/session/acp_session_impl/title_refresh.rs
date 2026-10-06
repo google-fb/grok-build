@@ -166,7 +166,11 @@ impl SessionActor {
 
         let response = match tokio::time::timeout(
             TITLE_REFRESH_MODEL_TIMEOUT,
-            setup.client.conversation_collect(request),
+            setup
+                .client
+                .clone()
+                .with_usage_purpose(xai_grok_usage::CallPurpose::Title)
+                .conversation_collect(request),
         )
         .await
         {

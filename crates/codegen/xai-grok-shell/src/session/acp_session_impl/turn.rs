@@ -1630,6 +1630,25 @@ impl SessionActor {
             tokio::time::sleep(POLL).await;
         }
     }
+    pub(super) async fn attach_session_requests(
+        &self,
+        mut usage: Option<crate::extensions::notification::PromptUsage>,
+    ) -> Option<crate::extensions::notification::PromptUsage> {
+        match self.chat_state_handle.try_get_session_usage().await {
+            Ok(ledger) => {
+                if let Some(requests) = ledger.request_usage {
+                    usage.get_or_insert_default().session_requests = Some(requests);
+                }
+            }
+            Err(()) if self.usage_observer.is_some() => {
+                let mut unknown = xai_grok_usage::CallLedger::new(false);
+                unknown.recording_errors = 1;
+                usage.get_or_insert_default().session_requests = Some(unknown);
+            }
+            Err(()) => {}
+        }
+        usage
+    }
     pub(super) async fn snapshot_prompt_usage(
         &self,
     ) -> Option<crate::extensions::notification::PromptUsage> {
@@ -1647,7 +1666,7 @@ impl SessionActor {
             .unattributed_background_usage
             .swap(false, std::sync::atomic::Ordering::Relaxed);
         let incomplete = incomplete || actor_background_spend || shared_background_spend;
-        match self.chat_state_handle.try_get_prompt_usage().await {
+        let usage = match self.chat_state_handle.try_get_prompt_usage().await {
             Ok(ledger) => {
                 let incomplete = incomplete || ledger.as_ref().is_some_and(|l| l.incomplete);
                 crate::extensions::notification::PromptUsage::project_from_ledger(
@@ -1658,7 +1677,8 @@ impl SessionActor {
             Err(()) => {
                 crate::extensions::notification::PromptUsage::project_from_ledger(None, true)
             }
-        }
+        };
+        self.attach_session_requests(usage).await
     }
     /// When freeze did not attach: incomplete if billed or may under-count; else omit.
     pub(super) async fn error_path_usage_fallback(
@@ -1668,13 +1688,14 @@ impl SessionActor {
         let may_undercount = Self::usage_incomplete_from_reply(
             self.outstanding_reply_for_prompt(prompt_id).await.as_ref(),
         );
-        match self.chat_state_handle.try_get_prompt_usage().await {
+        let usage = match self.chat_state_handle.try_get_prompt_usage().await {
             Ok(ledger) => crate::extensions::notification::PromptUsage::for_error_path(
                 ledger.as_ref(),
                 may_undercount,
             ),
             Err(()) => crate::extensions::notification::PromptUsage::for_error_path(None, true),
-        }
+        };
+        self.attach_session_requests(usage).await
     }
     /// Sticky incomplete for `prompt_id`, or the live pin when `None`.
     /// Returns true only if the coordinator acked the mark.
