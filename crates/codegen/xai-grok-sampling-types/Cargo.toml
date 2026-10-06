@@ -6,6 +6,7 @@ edition.workspace = true
 description = "Pure data types for the xAI sampling / chat-completion API layer"
 
 [dependencies]
+xai-grok-usage = { path = "../xai-grok-usage" }
 async-openai = { workspace = true }
 chrono = { workspace = true }
 indexmap = { workspace = true, features = ["serde"] }

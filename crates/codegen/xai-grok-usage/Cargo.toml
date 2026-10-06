@@ -1,0 +1,17 @@
+[package]
+license = "Apache-2.0"
+name = "xai-grok-usage"
+version = "0.1.0"
+edition.workspace = true
+description = "Content-free per-request provider usage records and accounting"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+futures = { workspace = true }
+
+[lints]
+workspace = true

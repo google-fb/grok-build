@@ -957,7 +957,7 @@ pub struct ConversationResponse {
 /// ingestion path must route through this before storing
 /// [`ConversationResponse::cost_usd_ticks`].
 pub fn reported_cost_ticks(raw: Option<i64>) -> Option<i64> {
-    raw.filter(|&t| t > 0)
+    xai_grok_usage::reported_cost_ticks(raw)
 }
 
 impl ConversationResponse {

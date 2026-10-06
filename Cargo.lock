@@ -14050,6 +14050,7 @@ dependencies = [
  "xai-circuit-breaker",
  "xai-grok-compaction",
  "xai-grok-tools",
+ "xai-grok-usage",
 ]
 
 [[package]]
@@ -14614,6 +14615,16 @@ dependencies = [
  "xai-grok-tools",
  "xai-grok-version",
  "zstd",
+]
+
+[[package]]
+name = "xai-grok-usage"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]
