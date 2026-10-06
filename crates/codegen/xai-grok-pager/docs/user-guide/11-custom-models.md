@@ -196,13 +196,21 @@ Errors distinguish `missing endpoint` from `unknown field` without showing key
 values. A missing provider reference is rejected during model resolution too;
 an own key or an explicit credential-fallback flag cannot bypass that check.
 
-The shared leader refreshes its model catalog when the global model, provider,
-or auth-helper tables change. Provider routes and their auth helpers are loaded
-together for new sessions. Embedded ACP clients must explicitly request a model
-reload. Reload does not promise to replace an existing session's captured sampler
-settings or change an in-flight request; use a new session to apply the refreshed
-catalog. An invalid referenced provider configuration leaves the previous valid
-routing in place.
+The shared leader requests a model catalog reload when the global model,
+provider, or auth-helper tables change. Embedded ACP clients must explicitly
+request a model reload. Endpoint selection uses the in-memory catalog, but an
+auth-provider helper can be resolved from configuration on disk at request time.
+These sources are not loaded atomically, even for new sessions: changing both an
+endpoint and its helper before a reload, or when an invalid model filter prevents
+the catalog update, can send the new helper's credential to the old endpoint.
+The reload request can report success despite that rejected catalog update, and
+the agent configuration may already have changed. Starting a new session or
+receiving a successful reload response does not guarantee that the endpoint and
+credential belong to the same configuration. This is a known existing limitation.
+Reload also does not promise to replace an existing session's captured sampler
+settings or change an in-flight request. Invalid referenced provider settings are
+rejected during parsing, but that check does not eliminate the separate disk and
+catalog credential-routing limitation above.
 
 ### Priority Order
 

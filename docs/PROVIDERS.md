@@ -61,13 +61,23 @@ printing credential values. This applies to built-in model overrides too.
 ## Reloading provider configuration
 
 The shared leader watches the global `[model]`, `[models]`, `[model_providers]`,
-and `[auth_provider]` tables. A reload refreshes the model entries and both
-provider maps together, including generated auth helpers from inline provider
-`auth` blocks. Embedded ACP stdio clients can explicitly request
+and `[auth_provider]` tables. A reload attempts to refresh the model catalog and
+updates the agent's in-memory provider maps, including generated auth helpers
+from inline provider `auth` blocks. Embedded ACP stdio clients can explicitly request
 `_x.ai/internal/reload_models` with `{}`; they do not run the leader's general
 configuration watcher.
 
-New sessions use the refreshed catalog. Reload does not promise to rewrite an
+Endpoint selection uses the in-memory catalog, while an auth-provider helper can
+be resolved from configuration on disk at request time. These sources are not
+loaded atomically, even for new sessions. Changing an endpoint and its helper on
+disk before reloading, or when an invalid model filter rejects the catalog update,
+can send the new helper's credential to the old endpoint. The reload request can
+still report success after such a rejection, and the agent configuration may
+already have changed. Neither a new session nor a successful reload response
+guarantees a matching endpoint and credential. This known existing limitation
+remains unresolved.
+
+New sessions use the available in-memory catalog. Reload does not promise to rewrite an
 existing session's captured sampler settings or reroute an in-flight call.
 Invalid referenced provider settings reject the reload before replacing the
 previous valid routing. Model resolution also rejects a missing provider in
