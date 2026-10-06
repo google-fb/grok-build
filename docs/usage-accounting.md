@@ -32,6 +32,16 @@ be reconstructed from its aggregate. `recording_errors` marks failed checkpoints
 or conflicting records. Neither an old file nor a failed read becomes a zero
 bill.
 
+If a syntactically valid `usage.json` has an unparseable `request_usage` extension
+(for example a newer schema, an unknown enum value, or a wrong `calls` type),
+the legacy `totals`, `by_model`, `main_loop_model_calls`, and `incomplete` still
+load unchanged. Only the unreadable request history is discarded. Its replacement
+has `history_complete=false` and `recording_errors=1`, so complete request totals
+remain null while new calls accumulate known subtotals. Missing or null extensions
+retain the legacy unknown-history meaning. This recovery does not repair an
+invalid whole JSON document or malformed legacy fields; the storage layer's
+pre-existing whole-file read failure behavior remains outside this extension.
+
 `summary.all`, `summary.main`, and `summary.auxiliary` partition the same records.
 `main` means `purpose == "main_loop"`, including child-session main loops;
 `auxiliary` contains the other purposes. These physical-attempt totals differ
@@ -48,6 +58,13 @@ Each summary reports `model_calls`, `pending_calls`, `failed_calls`,
   wrapped or saturated sum from masquerading as a correct total.
 - An empty scope has zero calls and zero known sums. This differs from a call
   whose provider omitted usage.
+
+Complete totals are often null: a single failed retry or a pending checkpoint
+interrupted before HTTP submission makes the history incomplete. Consumers should
+report `known_total` / `known_usd` as partial subtotals alongside `missing_calls`,
+`usage_is_incomplete`, `history_complete`, and `recording_errors`. Missing call
+counts only describe retained records; they cannot count discarded or pre-recording
+history. Do not interpret a null complete total as zero, or rely on it being present.
 
 ## Call records
 

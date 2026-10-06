@@ -40,6 +40,27 @@ class AccountingHandler(protocol.Handler):
             pass
 
 
+class ResumeHandler(AccountingHandler):
+    """One accepted main response per prompt; auxiliary requests stay separate."""
+    def do_POST(self):
+        if not self.path.endswith('/chat/completions'):
+            return super().do_POST()
+        body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
+        self.server.owner.requests.append(body)
+        chunk = {'id': 'synthetic-resume', 'object': 'chat.completion.chunk',
+                 'created': 0, 'model': 'synthetic-model',
+                 'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': 'Done.'},
+                              'finish_reason': 'stop'}],
+                 'usage': {'prompt_tokens': 100, 'completion_tokens': 10, 'total_tokens': 110,
+                           'prompt_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0},
+                           'completion_tokens_details': {'reasoning_tokens': 1}, 'cost': .01}}
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream')
+        self.end_headers()
+        self.wfile.write(('data: '+json.dumps(chunk)+'\n\ndata: [DONE]\n\n').encode())
+        self.wfile.flush()
+
+
 class ChildHandler(AccountingHandler):
     def do_POST(self):
         if not self.path.endswith('/chat/completions'):
@@ -246,6 +267,85 @@ class RequestUsageCli(unittest.TestCase):
                         self.assertNotEqual(main[0]['prompt_id'], main[-1]['prompt_id'])
                 self.run_case(output='json', after_case=resume)
 
+
+    def test_resume_malformed_request_usage_preserves_legacy_totals(self):
+        for damage in ('schema_version', 'purpose', 'calls', 'unknown_top_level'):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory(prefix='astra-resume-usage-') as folder:
+                root = Path(folder)
+                for name in ('home', 'grok', 'work', 'tmp'):
+                    (root/name).mkdir()
+                (root/'grok/config.toml').write_text('''[model_providers.synthetic]
+base_url = "http://127.0.0.1:28081/v1"
+provider_profile = "openrouter"
+env_key = "SYNTHETIC_PROVIDER_KEY"
+[model.synthetic]
+model_provider = "synthetic"
+model = "synthetic-model"
+context_window = 32768
+''')
+                self.requests, self.aux_requests = [], []
+                server = protocol.Server(('127.0.0.1', 28081), ResumeHandler)
+                server.owner = self
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    def invoke(*resume):
+                        run = subprocess.run([str(self.binary), *resume, '-p', 'Synthetic resume integrity.',
+                            '--model', 'synthetic', '--output-format', 'json', '--max-turns', '1',
+                            '--disable-web-search'], cwd=root/'work',
+                            env=protocol.isolated_env(root, 'http://127.0.0.1:28081/v1'),
+                            capture_output=True, text=True, timeout=30)
+                        self.assertEqual(run.returncode, 0, run.stdout[-2000:]+run.stderr[-2000:])
+                        return json.loads(run.stdout)
+                    invoke()
+                    path, = (root/'grok').rglob('usage.json')
+                    before = json.loads(path.read_text())
+                    self.assertEqual(before['totals']['model_calls'], 1)
+                    self.assertEqual(before['main_loop_model_calls'], 1)
+                    self.assertEqual(before['totals']['cost_by_source'], {'openrouter_usage_cost': .01})
+                    session = before['request_usage']['calls'][0]['origin_session_id']
+                    if damage == 'schema_version':
+                        before['request_usage']['schema_version'] = 2
+                    elif damage == 'purpose':
+                        before['request_usage']['calls'][0]['purpose'] = 'future-purpose'
+                    elif damage == 'calls':
+                        before['request_usage']['calls'] = 'invalid-call-list'
+                    else:
+                        before['future_top_level'] = {'synthetic': True}
+                    path.write_text(json.dumps(before))
+                    terminal = invoke('--resume', session)
+                    after = json.loads(path.read_text())
+                    self.assertEqual(len(self.requests), 2)
+                    self.assertEqual(after['totals']['model_calls'], 2)
+                    self.assertEqual(after['main_loop_model_calls'], 2)
+                    self.assertFalse(after['incomplete'])
+                    self.assertEqual(after['totals']['cost_by_source'], {'openrouter_usage_cost': .02})
+                    self.assertEqual(after['totals']['input_tokens'], 200)
+                    self.assertEqual(after['totals']['output_tokens'], 20)
+                    self.assertEqual(set(after['by_model']), set(before['by_model']))
+                    for model, original in before['by_model'].items():
+                        self.assertEqual(after['by_model'][model]['model_calls'], 2*original['model_calls'])
+                        self.assertEqual(after['by_model'][model]['cost_by_source'], {'openrouter_usage_cost': .02})
+                    requests = after['request_usage']
+                    self.assertEqual(terminal['session_requests'], requests)
+                    main = requests['summary']['main']
+                    if damage == 'unknown_top_level':
+                        self.assertTrue(requests['history_complete'])
+                        self.assertEqual(requests['recording_errors'], 0)
+                        self.assertAlmostEqual(main['cost']['total_usd'], .02)
+                        self.assertEqual(main['model_calls'], 2)
+                    else:
+                        self.assertFalse(requests['history_complete'])
+                        self.assertGreaterEqual(requests['recording_errors'], 1)
+                        self.assertTrue(main['usage_is_incomplete'])
+                        self.assertIsNone(main['cost']['total_usd'])
+                        self.assertIsNone(main['total_tokens']['total'])
+                        self.assertAlmostEqual(main['cost']['known_usd'], .01)
+                        self.assertEqual(main['model_calls'], 1)
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(2)
 
     def test_child_requests_forward_to_parent_once_for_inherit_and_override(self):
         for explicit_model in (False, True):
