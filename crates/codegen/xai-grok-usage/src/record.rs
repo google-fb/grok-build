@@ -177,9 +177,10 @@ impl ReportedUsage {
         }
         match provider {
             ProviderProfile::Xai => {
-                if let Some(value) = value.get("cost_in_usd_ticks").filter(|v| !v.is_null()) {
+                if let Some(value) = value.get("cost_in_usd_ticks") {
                     let raw = value.as_i64();
-                    self.invalid_fields |= raw.is_none() || raw.is_some_and(|v| v < 0);
+                    self.invalid_fields |=
+                        (!value.is_null() && raw.is_none()) || raw.is_some_and(|v| v < 0);
                     self.cost_usd_ticks = reported_cost_ticks(raw);
                     self.provider_cost = ProviderCost::from_xai_ticks(self.cost_usd_ticks);
                 }
@@ -237,6 +238,32 @@ impl CallRecord {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn explicit_null_xai_cost_clears_prior_money_but_omission_preserves_it() {
+        let mut usage = ReportedUsage::default();
+        usage.update(
+            &json!({"input_tokens": 10, "output_tokens": 2, "cost_in_usd_ticks": 20000000}),
+            CallBackend::Responses,
+            ProviderProfile::Xai,
+        );
+        usage.update(
+            &json!({"output_tokens": 3}),
+            CallBackend::Responses,
+            ProviderProfile::Xai,
+        );
+        assert_eq!(usage.cost_usd_ticks, Some(20000000));
+        assert_eq!(usage.provider_cost.unwrap().usd, 0.002);
+        usage.update(
+            &json!({"cost_in_usd_ticks": null}),
+            CallBackend::Responses,
+            ProviderProfile::Xai,
+        );
+        assert_eq!(usage.cost_usd_ticks, None);
+        assert_eq!(usage.provider_cost, None);
+        assert_eq!(usage.total_tokens(), Some(13));
+        assert!(!usage.invalid_fields);
+    }
 
     #[test]
     fn preserves_missing_zero_details_and_cumulative_values() {
