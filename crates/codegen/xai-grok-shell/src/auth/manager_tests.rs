@@ -3812,7 +3812,7 @@ async fn process_key_from_model_env_key() {
         .unwrap(),
     )
     .unwrap();
-    let key = resolve_model_list(&cfg, None)
+    let key = resolve_model_list(&cfg, None).unwrap()
         .get(dm)
         .and_then(|m| m.own_credential())
         .unwrap();

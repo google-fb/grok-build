@@ -786,7 +786,7 @@ fn cwd_matches(session_cwd: &std::path::Path, target_cwd: &std::path::Path) -> b
 // internal/reload_models
 
 /// Re-resolve the agent model list from config.toml. Called by the config
-/// hot-reload watcher when `[model.*]` or `[models]` changes.
+/// hot-reload watcher when model, provider, or auth-helper tables change.
 ///
 /// Re-reads config from disk, re-runs the same resolution logic as
 /// `new_with_models()` for user TOML config entries, and swaps the model list
@@ -814,6 +814,10 @@ fn handle_reload_models(agent: &MvpAgent) -> ExtResult {
         let mut agent_config = agent.cfg.borrow_mut();
         agent_config.models = toml_config.models.clone();
         agent_config.config_models = toml_config.config_models.clone();
+        agent_config.model_providers = toml_config.model_providers.clone();
+        // Includes generated names for inline [model_providers.*.auth] helpers.
+        agent_config.auth_providers = toml_config.auth_providers.clone();
+        agent_config.config_warnings = toml_config.config_warnings.clone();
         agent_config.web_search_model = overrides.web_search;
         agent_config.session_summary_model = overrides.session_summary;
         agent_config.image_description_model = overrides.image_description;

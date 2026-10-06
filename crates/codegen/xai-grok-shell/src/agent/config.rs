@@ -3546,10 +3546,12 @@ fn managed_settings_env_flag(key: &str) -> Option<bool> {
 }
 /// Assemble the final model map. Priority (highest wins):
 /// config.toml `[model.*]` > prefetched (remote) > hardcoded defaults.
+/// Reject unresolved provider references even for in-memory configurations.
+/// A missing provider must never become a default endpoint, with or without a key.
 pub(crate) fn resolve_model_list(
     cfg: &Config,
     prefetched: Option<IndexMap<String, ModelEntry>>,
-) -> IndexMap<String, ModelEntry> {
+) -> Result<IndexMap<String, ModelEntry>, String> {
     let mut resolved: IndexMap<String, ModelEntry> = IndexMap::new();
     if cfg.endpoints.has_custom_endpoint() {
         tracing::info!(
@@ -3608,12 +3610,14 @@ pub(crate) fn resolve_model_list(
                 );
             }
         }
-        let with_provider = model_override.model_provider.as_deref().map(|pid| {
-            match cfg.model_providers.get(pid) {
-                Some(provider) => model_override.with_provider_defaults(provider, pid),
-                None => model_override.with_missing_provider(),
-            }
-        });
+        let with_provider = if let Some(pid) = model_override.model_provider.as_deref() {
+            let provider = cfg.model_providers.get(pid).ok_or_else(|| format!(
+                "undefined model_provider \"{pid}\" referenced by model.\"{key}\"; model resolution rejected"
+            ))?;
+            Some(model_override.with_provider_defaults(provider, pid))
+        } else {
+            None
+        };
         let effective = with_provider.as_ref().unwrap_or(model_override);
         let mut entry = effective.apply(key, base, &cfg.endpoints);
         let session_bearer_unsafe = !crate::util::is_xai_api_bearer_url(&entry.info.base_url)
@@ -3706,7 +3710,7 @@ pub(crate) fn resolve_model_list(
     for entry in resolved.values_mut() {
         entry.info.derive_reasoning_effort_fields();
     }
-    resolved
+    Ok(resolved)
 }
 /// Layer 6 of [`resolve_model_list`]: fold the global `[models].extra_headers`
 /// into every model as a base. The presence check is case-insensitive because
@@ -5029,7 +5033,9 @@ pub(crate) fn try_resolve_model_credentials(
     let cfg = Config::new_from_toml_cfg(&raw)
         .map_err(|e| tracing::warn!(error = %e, "config parse failed for credential resolution"))
         .ok()?;
-    let models = resolve_model_list(&cfg, None);
+    let models = resolve_model_list(&cfg, None)
+        .map_err(|error| tracing::warn!(%error, "model credential resolution failed"))
+        .ok()?;
     let entry = find_model_by_id(&models, model_id)?;
     let mut credentials = resolve_credentials(entry, session_key);
     enforce_disable_api_key_auth(
@@ -5107,7 +5113,13 @@ fn with_resolved_model<T>(model_id: &str, f: impl FnOnce(ModelLookup) -> T) -> T
     else {
         return f(ModelLookup::ConfigUnavailable);
     };
-    let models = resolve_model_list(&cfg, None);
+    let models = match resolve_model_list(&cfg, None) {
+        Ok(models) => models,
+        Err(error) => {
+            tracing::warn!(%error, "model auth lookup failed");
+            return f(ModelLookup::ConfigUnavailable);
+        }
+    };
     f(ModelLookup::Loaded(find_model_by_id(&models, model_id)))
 }
 /// Resolve a standalone `SamplerConfig` for an auxiliary model slug (image

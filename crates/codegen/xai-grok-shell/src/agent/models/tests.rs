@@ -641,7 +641,7 @@ fn default_model_honors_allowlist_when_no_default_set() {
             context_window = 256000
             "#,
     );
-    let catalog = resolve_model_catalog(&cfg, None);
+    let catalog = resolve_model_catalog(&cfg, None).unwrap();
     let (_key, entry, _src) = resolve_default_model(&cfg, &catalog, true);
     assert!(
         entry.info.user_selectable,
@@ -667,7 +667,7 @@ fn validate_selectable_rejects_bad_allowlists() {
             context_window = 256000
             "#,
     );
-    let catalog = resolve_model_catalog(&excluded, None);
+    let catalog = resolve_model_catalog(&excluded, None).unwrap();
     assert!(
         validate_selectable(&excluded, &catalog)
             .unwrap_err()
@@ -684,7 +684,7 @@ fn validate_selectable_rejects_bad_allowlists() {
             context_window = 256000
             "#,
     );
-    let catalog = resolve_model_catalog(&zero, None);
+    let catalog = resolve_model_catalog(&zero, None).unwrap();
     assert!(validate_selectable(&zero, &catalog).is_err());
 }
 
@@ -793,12 +793,69 @@ fn rebuild_updates_models_and_available() {
         },
     );
 
-    mgr.rebuild(&cfg, Some(prefetched));
+    mgr.rebuild(&cfg, Some(prefetched)).unwrap();
 
     assert!(
         !mgr.models().is_empty(),
         "models should be populated after rebuild"
     );
+}
+
+#[test]
+fn invalid_provider_catalog_cannot_replace_valid_manager_state() {
+    let raw: toml::Value = toml::from_str(
+        r#"
+        [model_providers.gateway]
+        base_url = "https://provider.example/v1"
+        [model.synthetic]
+        model_provider = "gateway"
+        [models]
+        default = "synthetic"
+    "#,
+    )
+    .unwrap();
+    let cfg = config::Config::new_from_toml_cfg(&raw).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let auth = Arc::new(AuthManager::new(tmp.path(), GrokComConfig::default()));
+    let mgr = ModelsManager::new(
+        None,
+        config::resolve_model_list(&cfg, None).unwrap(),
+        acp::ModelId::new("synthetic"),
+        auth.clone(),
+        cfg.clone(),
+    );
+    let snapshot = || {
+        let cat = mgr.inner.catalog.read();
+        (
+            serde_json::to_value(&*mgr.inner.cfg.read()).unwrap(),
+            serde_json::to_value(&cat.models).unwrap(),
+            serde_json::to_value(&cat.prefetched).unwrap(),
+            cat.etag.clone(),
+            cat.has_fetched_real_catalog,
+            cat.generation,
+            mgr.current_model_id().0.to_string(),
+            mgr.model_switch_generation(),
+            format!("{:?}", *mgr.inner.catalog_progress.borrow()),
+        )
+    };
+    let before = snapshot();
+    let mut invalid = cfg.clone();
+    invalid.model_providers.clear();
+    invalid.models.default = Some("synthetic-new".into());
+    assert!(ModelsManager::from_config(&invalid, Some(IndexMap::new()), auth).is_err());
+    mgr.apply_config(invalid.clone());
+    assert_eq!(snapshot(), before);
+    assert!(mgr.rebuild(&invalid, None).is_err());
+    assert_eq!(snapshot(), before);
+    mgr.rebuild_bundled(&invalid);
+    assert_eq!(snapshot(), before);
+    assert!(!mgr.apply_catalog_fenced(
+        &invalid,
+        make_prefetched(&["synthetic-new"]),
+        Some("synthetic-new-etag".into()),
+        None
+    ));
+    assert_eq!(snapshot(), before);
 }
 
 #[test]
@@ -848,7 +905,7 @@ fn default_reasoning_effort_only_stamps_supporting_model() {
     reasoning_entry.info.supports_reasoning_effort = true;
     prefetched.insert("reasoning-model".to_string(), reasoning_entry);
 
-    let catalog = resolve_model_catalog(&cfg, Some(prefetched));
+    let catalog = resolve_model_catalog(&cfg, Some(prefetched)).unwrap();
     assert_eq!(
         catalog["reasoning-model"].info.reasoning_effort,
         Some(ReasoningEffort::High),
@@ -869,7 +926,7 @@ fn default_reasoning_effort_only_stamps_supporting_model() {
     };
     prefetched.insert("plain-model".to_string(), plain_entry);
 
-    let catalog = resolve_model_catalog(&cfg, Some(prefetched));
+    let catalog = resolve_model_catalog(&cfg, Some(prefetched)).unwrap();
     assert_eq!(
         catalog["plain-model"].info.reasoning_effort, None,
         "non-reasoning default model must NOT be stamped with persisted effort",
@@ -922,7 +979,7 @@ fn reasoning_effort_override_skips_models_that_do_not_offer_level() {
     }];
     prefetched.insert("legacy-none".to_string(), with_none);
 
-    let catalog = resolve_model_catalog(&cfg, Some(prefetched));
+    let catalog = resolve_model_catalog(&cfg, Some(prefetched)).unwrap();
     assert_eq!(
         catalog["grok-4.5"].info.reasoning_effort,
         Some(ReasoningEffort::High),
@@ -963,7 +1020,7 @@ fn config_menu_only_model_derives_support_and_default() {
     cfg.config_models
         .insert("plain".to_string(), config::ConfigModelOverride::default());
 
-    let catalog = resolve_model_catalog(&cfg, None);
+    let catalog = resolve_model_catalog(&cfg, None).unwrap();
     let info = &catalog["menu-only"].info;
     assert!(
         info.supports_reasoning_effort,
@@ -1030,7 +1087,7 @@ fn cli_reasoning_effort_override_only_stamps_supporting_models() {
     };
     prefetched.insert("plain-model".to_string(), plain_entry);
 
-    let catalog = resolve_model_catalog(&cfg, Some(prefetched));
+    let catalog = resolve_model_catalog(&cfg, Some(prefetched)).unwrap();
     assert_eq!(
         catalog["reasoning-model"].info.reasoning_effort,
         Some(ReasoningEffort::High),

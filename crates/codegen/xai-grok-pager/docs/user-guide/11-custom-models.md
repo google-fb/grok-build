@@ -192,6 +192,25 @@ api_key = "sk-custom"
 When you override a built-in model, Grok starts with the default configuration (including the correct `base_url`), then applies only the fields you specify. Unspecified fields inherit from the default. A per-model credential must have an
 explicit `base_url` (or inherit explicitly configured custom enterprise endpoints),
 so a misspelled third-party endpoint cannot silently send that credential to xAI.
+Errors distinguish `missing endpoint` from `unknown field` without showing key
+values. A missing provider reference is rejected during model resolution too;
+an own key or an explicit credential-fallback flag cannot bypass that check.
+
+The shared leader requests a model catalog reload when the global model,
+provider, or auth-helper tables change. Embedded ACP clients must explicitly
+request a model reload. Endpoint selection uses the in-memory catalog, but an
+auth-provider helper can be resolved from configuration on disk at request time.
+These sources are not loaded atomically, even for new sessions: changing both an
+endpoint and its helper before a reload, or when an invalid model filter prevents
+the catalog update, can send the new helper's credential to the old endpoint.
+The reload request can report success despite that rejected catalog update, and
+the agent configuration may already have changed. Starting a new session or
+receiving a successful reload response does not guarantee that the endpoint and
+credential belong to the same configuration. This is a known existing limitation.
+Reload also does not promise to replace an existing session's captured sampler
+settings or change an in-flight request. Invalid referenced provider settings are
+rejected during parsing, but that check does not eliminate the separate disk and
+catalog credential-routing limitation above.
 
 ### Priority Order
 

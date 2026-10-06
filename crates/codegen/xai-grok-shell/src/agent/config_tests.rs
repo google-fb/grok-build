@@ -798,7 +798,7 @@ fn parses_model_api_key() {
     )
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-    let resolved = resolve_model_list(&cfg, None);
+    let resolved = resolve_model_list(&cfg, None).unwrap();
     let model = resolved.get("my-custom-model").expect("model should exist");
     assert_eq!(model.info.model, "grok-4.5");
     assert_eq!(model.info.base_url, "https://api.example.com/v1");
@@ -833,7 +833,7 @@ fn parses_auth_provider_tables_and_model_reference() {
             cwd: None,
         })
     );
-    let resolved = resolve_model_list(&cfg, None);
+    let resolved = resolve_model_list(&cfg, None).unwrap();
     let model = resolved.get("proxied-claude").expect("model should exist");
     let provider = model
         .auth_provider
@@ -872,7 +872,7 @@ async fn static_key_shadows_defined_provider_through_pipeline() {
     )
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-    let resolved = resolve_model_list(&cfg, None);
+    let resolved = resolve_model_list(&cfg, None).unwrap();
     let model = resolved.get("dual-auth").expect("model should exist");
     assert_eq!(
         model.effective_auth_provider().map(|p| p.name.as_str()),
@@ -899,7 +899,7 @@ fn undefined_auth_provider_fails_closed() {
     )
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-    let resolved = resolve_model_list(&cfg, None);
+    let resolved = resolve_model_list(&cfg, None).unwrap();
     let model = resolved.get("orphan").expect("model should exist");
     let provider = model.auth_provider.as_ref().unwrap();
     assert_eq!(provider.name, "nope");
@@ -977,7 +977,7 @@ fn prefetched_entry_provider_config_comes_from_trusted_tables_only() {
     let mut prefetched = IndexMap::new();
     prefetched.insert("cached-model".to_string(), entry);
     let cfg = Config::default();
-    let resolved = resolve_model_list(&cfg, Some(prefetched.clone()));
+    let resolved = resolve_model_list(&cfg, Some(prefetched.clone())).unwrap();
     let provider = resolved["cached-model"].auth_provider.as_ref().unwrap();
     assert_eq!(
         resolve_credentials(&resolved["cached-model"], Some("session-jwt")).api_key,
@@ -996,7 +996,7 @@ fn prefetched_entry_provider_config_comes_from_trusted_tables_only() {
             cwd: None,
         },
     );
-    let resolved = resolve_model_list(&cfg, Some(prefetched));
+    let resolved = resolve_model_list(&cfg, Some(prefetched)).unwrap();
     let provider = resolved["cached-model"].auth_provider.as_ref().unwrap();
     assert_eq!(provider.config.command, "printf local");
 }
@@ -1019,7 +1019,7 @@ fn provider_model_fails_closed_on_prefetched_custom_base_url() {
         "m".to_string(),
         test_model_entry("m", "https://evil.example/v1", None, None, None),
     );
-    let resolved = resolve_model_list(&cfg, Some(prefetched));
+    let resolved = resolve_model_list(&cfg, Some(prefetched)).unwrap();
     assert_eq!(
         resolve_credentials(&resolved["m"], Some("session-jwt")).api_key,
         None,
@@ -1687,7 +1687,7 @@ fn user_override_adds_api_key_to_default_model() {
     ))
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-    let resolved = resolve_model_list(&cfg, None);
+    let resolved = resolve_model_list(&cfg, None).unwrap();
     let model = resolved.get(dm).expect("model should exist");
     assert_eq!(model.api_key, Some("user-custom-api-key".to_string()));
     assert_eq!(model.info.model, dm);
@@ -1740,7 +1740,7 @@ fn user_override_parses_compaction_at_tokens_from_toml() {
     ))
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-    let model = resolve_model_list(&cfg, None)
+    let model = resolve_model_list(&cfg, None).unwrap()
         .get(dm)
         .expect("model should exist")
         .clone();
@@ -1756,7 +1756,7 @@ fn user_override_parses_compaction_at_tokens_from_toml() {
     ))
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-    let model = resolve_model_list(&cfg, None)
+    let model = resolve_model_list(&cfg, None).unwrap()
         .get(dm)
         .expect("model should exist")
         .clone();
@@ -1777,7 +1777,7 @@ fn user_override_parses_compactions_remaining_from_toml() {
     ))
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-    let model = resolve_model_list(&cfg, None)
+    let model = resolve_model_list(&cfg, None).unwrap()
         .get(dm)
         .expect("model should exist")
         .clone();
@@ -1793,7 +1793,7 @@ fn user_override_parses_compactions_remaining_from_toml() {
     ))
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-    let model = resolve_model_list(&cfg, None)
+    let model = resolve_model_list(&cfg, None).unwrap()
         .get(dm)
         .expect("model should exist")
         .clone();
@@ -1809,7 +1809,7 @@ fn user_override_parses_compactions_remaining_from_toml() {
     ))
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-    let model = resolve_model_list(&cfg, None)
+    let model = resolve_model_list(&cfg, None).unwrap()
         .get(dm)
         .expect("model should exist")
         .clone();
@@ -1923,7 +1923,7 @@ fn parses_model_context_window() {
     )
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-    let resolved = resolve_model_list(&cfg, None);
+    let resolved = resolve_model_list(&cfg, None).unwrap();
     let model = resolved.get("my-custom-model").expect("model should exist");
     assert_eq!(model.info.context_window, NonZeroU64::new(256_000).unwrap());
 }
@@ -1964,7 +1964,7 @@ fn parses_model_api_backend_responses() {
     )
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-    let resolved = resolve_model_list(&cfg, None);
+    let resolved = resolve_model_list(&cfg, None).unwrap();
     let model = resolved
         .get("my-responses-model")
         .expect("model should exist");
@@ -1983,7 +1983,7 @@ fn parses_model_api_backend_chat_completions() {
     )
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-    let resolved = resolve_model_list(&cfg, None);
+    let resolved = resolve_model_list(&cfg, None).unwrap();
     let model = resolved.get("my-chat-model").expect("model should exist");
     assert_eq!(model.info.api_backend, ApiBackend::ChatCompletions);
 }
@@ -2003,7 +2003,7 @@ fn model_messages_backend_auto_defaults_supports_reasoning_effort() {
     )
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-    let resolved = resolve_model_list(&cfg, None);
+    let resolved = resolve_model_list(&cfg, None).unwrap();
     let model = resolved.get("my-claude").expect("model should exist");
     assert!(
         model.info.supports_reasoning_effort,
@@ -2026,7 +2026,7 @@ fn model_messages_backend_respects_explicit_supports_reasoning_effort_false() {
     )
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-    let resolved = resolve_model_list(&cfg, None);
+    let resolved = resolve_model_list(&cfg, None).unwrap();
     let model = resolved.get("my-claude").expect("model should exist");
     assert!(
         !model.info.supports_reasoning_effort,
@@ -2048,7 +2048,7 @@ fn model_chat_completions_backend_does_not_auto_default_supports_reasoning_effor
     )
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-    let resolved = resolve_model_list(&cfg, None);
+    let resolved = resolve_model_list(&cfg, None).unwrap();
     let model = resolved.get("my-openai").expect("model should exist");
     assert!(
         !model.info.supports_reasoning_effort,
@@ -2067,7 +2067,7 @@ fn model_api_backend_defaults_to_chat_completions() {
     )
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-    let resolved = resolve_model_list(&cfg, None);
+    let resolved = resolve_model_list(&cfg, None).unwrap();
     let model = resolved.get("my-model").expect("model should exist");
     assert_eq!(model.info.api_backend, ApiBackend::ChatCompletions);
 }
@@ -2098,7 +2098,7 @@ fn parses_model_use_concise_true() {
     )
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-    let resolved = resolve_model_list(&cfg, None);
+    let resolved = resolve_model_list(&cfg, None).unwrap();
     let model = resolved
         .get("my-concise-model")
         .expect("model should exist");
@@ -2116,7 +2116,7 @@ fn model_use_concise_defaults_to_false() {
     )
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-    let resolved = resolve_model_list(&cfg, None);
+    let resolved = resolve_model_list(&cfg, None).unwrap();
     let model = resolved.get("my-model").expect("model should exist");
     assert!(!model.info.use_concise);
 }
@@ -2176,7 +2176,7 @@ fn deprecated_toolset_use_concise_is_ignored_in_model_config() {
     )
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-    let resolved = resolve_model_list(&cfg, None);
+    let resolved = resolve_model_list(&cfg, None).unwrap();
     let model = resolved.get("my-model").expect("model should exist");
     assert!(
         !model.info.use_concise,
@@ -2261,7 +2261,7 @@ fn parses_model_with_agent_type() {
     )
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-    let resolved = resolve_model_list(&cfg, None);
+    let resolved = resolve_model_list(&cfg, None).unwrap();
     let model = resolved.get("my-agent-model").expect("model should exist");
     assert_eq!(model.info.agent_type, "codex");
 }
@@ -2277,7 +2277,7 @@ fn model_agent_type_defaults_to_grok_build() {
     )
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-    let resolved = resolve_model_list(&cfg, None);
+    let resolved = resolve_model_list(&cfg, None).unwrap();
     let model = resolved.get("my-model").expect("model should exist");
     assert_eq!(model.info.agent_type, DEFAULT_AGENT_TYPE);
 }
@@ -2539,7 +2539,7 @@ fn hidden_model_excluded_from_acp_but_kept_in_catalog() {
     )
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).unwrap();
-    let catalog = resolve_model_catalog(&cfg, None);
+    let catalog = resolve_model_catalog(&cfg, None).unwrap();
     let available = available_models(&catalog, true);
     assert!(
         catalog.contains_key("visible-model"),
@@ -2572,7 +2572,7 @@ fn disabled_models_removed_from_catalog() {
             "#,
     )
     .unwrap();
-    let catalog = resolve_model_catalog(&Config::new_from_toml_cfg(&raw).unwrap(), None);
+    let catalog = resolve_model_catalog(&Config::new_from_toml_cfg(&raw).unwrap(), None).unwrap();
     assert!(!catalog.contains_key("to-disable"));
 }
 #[test]
@@ -2589,7 +2589,7 @@ fn hidden_models_kept_in_catalog_but_not_in_acp() {
             "#,
     )
     .unwrap();
-    let catalog = resolve_model_catalog(&Config::new_from_toml_cfg(&raw).unwrap(), None);
+    let catalog = resolve_model_catalog(&Config::new_from_toml_cfg(&raw).unwrap(), None).unwrap();
     let available = available_models(&catalog, true);
     assert!(catalog.contains_key("to-hide"));
     assert!(catalog["to-hide"].info.hidden);
@@ -2617,7 +2617,7 @@ fn allowed_models_marks_selectable_by_wildcard_key_or_model() {
             "#,
     )
     .unwrap();
-    let catalog = resolve_model_catalog(&Config::new_from_toml_cfg(&raw).unwrap(), None);
+    let catalog = resolve_model_catalog(&Config::new_from_toml_cfg(&raw).unwrap(), None).unwrap();
     assert!(catalog["keep-one"].info.user_selectable, "wildcard match");
     assert!(
         catalog["explicit-key"].info.user_selectable,
@@ -2642,7 +2642,7 @@ fn allowed_models_empty_is_unrestricted() {
             "#,
     )
     .unwrap();
-    let catalog = resolve_model_catalog(&Config::new_from_toml_cfg(&raw).unwrap(), None);
+    let catalog = resolve_model_catalog(&Config::new_from_toml_cfg(&raw).unwrap(), None).unwrap();
     assert!(
         catalog["foo"].info.user_selectable,
         "empty allowed_models must not restrict"
@@ -2687,7 +2687,7 @@ fn supported_in_api_false_hides_from_api_key_users() {
     )
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw).unwrap();
-    let catalog = resolve_model_catalog(&cfg, None);
+    let catalog = resolve_model_catalog(&cfg, None).unwrap();
     assert!(catalog.contains_key("oauth-only-model"));
     assert!(catalog.contains_key("public-model"));
     let api_available = available_models(&catalog, false);
@@ -2714,7 +2714,7 @@ fn inference_idle_timeout_secs_round_trip() {
     )
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-    let resolved = resolve_model_list(&cfg, None);
+    let resolved = resolve_model_list(&cfg, None).unwrap();
     let model = resolved.get("slow-model").expect("model should exist");
     assert_eq!(model.info.inference_idle_timeout_secs, Some(600));
 }
@@ -2730,7 +2730,7 @@ fn inference_idle_timeout_secs_absent_defaults_to_none() {
     )
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-    let resolved = resolve_model_list(&cfg, None);
+    let resolved = resolve_model_list(&cfg, None).unwrap();
     let model = resolved.get("default-model").expect("model should exist");
     assert_eq!(model.info.inference_idle_timeout_secs, None);
 }
@@ -3016,7 +3016,7 @@ fn resolve_models_from_toml(
 ) -> (Config, IndexMap<String, ModelEntry>) {
     let raw: toml::Value = toml::from_str(toml_str).expect("test TOML should parse");
     let cfg = Config::new_from_toml_cfg(&raw).expect("config should parse");
-    let resolved = resolve_model_list(&cfg, prefetched);
+    let resolved = resolve_model_list(&cfg, prefetched).unwrap();
     (cfg, resolved)
 }
 fn resolve_sampling(model: &ModelEntry, session_key: Option<&str>) -> SamplerConfig {
@@ -3333,7 +3333,7 @@ fn e2e_enterprise_custom_endpoint_skips_xai_defaults() {
             None,
         ),
     );
-    let resolved = resolve_model_list(&cfg, Some(prefetched));
+    let resolved = resolve_model_list(&cfg, Some(prefetched)).unwrap();
     assert!(
         resolved.contains_key("acme-model"),
         "enterprise model should be present"
@@ -3347,7 +3347,7 @@ fn e2e_enterprise_custom_endpoint_skips_xai_defaults() {
 #[test]
 fn e2e_default_endpoint_still_injects_defaults() {
     let cfg = Config::default();
-    let resolved = resolve_model_list(&cfg, None);
+    let resolved = resolve_model_list(&cfg, None).unwrap();
     assert!(
         resolved.contains_key(crate::models::default_model()),
         "default model should be present when using default endpoint"
@@ -6624,7 +6624,7 @@ fn slug_propagation_enterprise_managed_config_key_mismatch() {
     );
     entry.info.context_window = NonZeroU64::new(default_cw).unwrap();
     prefetched.insert("grok-4.5".to_owned(), entry);
-    let resolved = resolve_model_list(&cfg, Some(prefetched));
+    let resolved = resolve_model_list(&cfg, Some(prefetched)).unwrap();
     let by_key = resolved
         .get("grok-build")
         .expect("grok-build key must exist");
@@ -6660,7 +6660,7 @@ fn slug_propagation_inherits_api_backend_but_not_agent_type() {
     entry.info.agent_type = default_agent_type();
     entry.info.api_backend = ApiBackend::default();
     prefetched.insert("grok-4.5".to_owned(), entry);
-    let resolved = resolve_model_list(&cfg, Some(prefetched));
+    let resolved = resolve_model_list(&cfg, Some(prefetched)).unwrap();
     let latest = resolved.get("grok-4.5").unwrap();
     assert_eq!(
         latest.info.agent_type,
@@ -6691,7 +6691,7 @@ fn slug_propagation_does_not_overwrite_explicit_context_window() {
     let mut entry = test_model_entry("grok-4.5", "https://test.example.com/v1", None, None, None);
     entry.info.context_window = NonZeroU64::new(65_536).unwrap();
     prefetched.insert("grok-4.5".to_owned(), entry);
-    let resolved = resolve_model_list(&cfg, Some(prefetched));
+    let resolved = resolve_model_list(&cfg, Some(prefetched)).unwrap();
     let latest = resolved.get("grok-4.5").unwrap();
     assert_eq!(
         latest.info.context_window.get(),
@@ -6714,7 +6714,7 @@ fn slug_propagation_noop_when_no_donor() {
     );
     entry.info.context_window = NonZeroU64::new(default_cw).unwrap();
     prefetched.insert("some-unknown-model".to_owned(), entry);
-    let resolved = resolve_model_list(&cfg, Some(prefetched));
+    let resolved = resolve_model_list(&cfg, Some(prefetched)).unwrap();
     let model = resolved.get("some-unknown-model").unwrap();
     assert_eq!(
         model.info.context_window.get(),
@@ -6864,7 +6864,7 @@ fn global_extra_headers_apply_to_prefetched_model() {
     let entry = prefetch_model_entry("remote-only-model", 200_000, ApiBackend::default());
     let mut prefetched = IndexMap::new();
     prefetched.insert("remote-only-model".to_owned(), entry);
-    let resolved = resolve_model_list(&cfg, Some(prefetched));
+    let resolved = resolve_model_list(&cfg, Some(prefetched)).unwrap();
     let model = resolved
         .get("remote-only-model")
         .expect("prefetched model should exist");
@@ -6891,7 +6891,7 @@ fn global_model_defaults_apply_to_model_without_override() {
     let entry = prefetch_model_entry("remote-only-model", 200_000, ApiBackend::default());
     let mut prefetched = IndexMap::new();
     prefetched.insert("remote-only-model".to_owned(), entry);
-    let resolved = resolve_model_list(&cfg, Some(prefetched));
+    let resolved = resolve_model_list(&cfg, Some(prefetched)).unwrap();
     let info = &resolved
         .get("remote-only-model")
         .expect("prefetched model should exist")
@@ -6919,7 +6919,7 @@ fn per_model_value_overrides_global_model_default() {
     let entry = prefetch_model_entry("remote-only-model", 200_000, ApiBackend::default());
     let mut prefetched = IndexMap::new();
     prefetched.insert("remote-only-model".to_owned(), entry);
-    let resolved = resolve_model_list(&cfg, Some(prefetched));
+    let resolved = resolve_model_list(&cfg, Some(prefetched)).unwrap();
     let model = resolved
         .get("remote-only-model")
         .expect("model should exist");
@@ -6943,7 +6943,7 @@ fn global_model_defaults_do_not_override_prefetched_value() {
     entry.info.max_retries = Some(3);
     let mut prefetched = IndexMap::new();
     prefetched.insert("remote-only-model".to_owned(), entry);
-    let resolved = resolve_model_list(&cfg, Some(prefetched));
+    let resolved = resolve_model_list(&cfg, Some(prefetched)).unwrap();
     let model = resolved
         .get("remote-only-model")
         .expect("prefetched model should exist");
@@ -6980,7 +6980,7 @@ fn config_model_reasoning_efforts_parses_inline_tables_and_bare_strings() {
     )
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
-    let resolved = resolve_model_list(&cfg, None);
+    let resolved = resolve_model_list(&cfg, None).unwrap();
     let custom = &resolved.get("custom").expect("custom model").info;
     assert_eq!(custom.reasoning_efforts.len(), 2);
     assert_eq!(custom.reasoning_efforts[0].label, "High");
@@ -7016,7 +7016,7 @@ fn resolve_model_list_config_reasoning_efforts_beats_remote() {
     }];
     let mut prefetched = IndexMap::new();
     prefetched.insert("grok-x".to_owned(), entry);
-    let resolved = resolve_model_list(&cfg, Some(prefetched));
+    let resolved = resolve_model_list(&cfg, Some(prefetched)).unwrap();
     let efforts = &resolved
         .get("grok-x")
         .expect("grok-x")
@@ -7036,7 +7036,7 @@ fn resolve_model_list_inherits_context_window_from_default_when_prefetched_has_f
     let entry = prefetch_model_entry(dm, default_cw, ApiBackend::default());
     let mut prefetched = IndexMap::new();
     prefetched.insert(dm.to_owned(), entry);
-    let resolved = resolve_model_list(&cfg, Some(prefetched));
+    let resolved = resolve_model_list(&cfg, Some(prefetched)).unwrap();
     let entry = resolved.get(dm).expect("model must exist");
     assert_ne!(
         entry.info.context_window.get(),
@@ -7052,7 +7052,7 @@ fn resolve_model_list_does_not_override_explicitly_set_context_window() {
     let entry = prefetch_model_entry(dm, explicit_cw, ApiBackend::default());
     let mut prefetched = IndexMap::new();
     prefetched.insert(dm.to_owned(), entry);
-    let resolved = resolve_model_list(&cfg, Some(prefetched));
+    let resolved = resolve_model_list(&cfg, Some(prefetched)).unwrap();
     let entry = resolved.get(dm).expect("model must exist");
     assert_eq!(
         entry.info.context_window.get(),
@@ -7068,7 +7068,7 @@ fn resolve_model_list_inherits_agent_type_and_api_backend() {
     let entry = prefetch_model_entry(dm, default_cw, ApiBackend::default());
     let mut prefetched = IndexMap::new();
     prefetched.insert(dm.to_owned(), entry);
-    let resolved = resolve_model_list(&cfg, Some(prefetched));
+    let resolved = resolve_model_list(&cfg, Some(prefetched)).unwrap();
     let entry = resolved.get(dm).expect("model must exist");
     let defaults = default_model_entries(&EndpointsConfig::default());
     if let Some(default) = defaults.get(dm) {
@@ -7115,9 +7115,9 @@ fn resolve_model_list_prunes_bundled_entries_not_in_prefetch() {
     if let Some(e) = defs.shift_remove(dm) {
         p.insert(dm.to_string(), e);
     }
-    let resolved = resolve_model_list(&cfg, Some(p));
+    let resolved = resolve_model_list(&cfg, Some(p)).unwrap();
     assert!(resolved.contains_key(dm));
-    let no_p = resolve_model_list(&cfg, None);
+    let no_p = resolve_model_list(&cfg, None).unwrap();
     assert!(no_p.contains_key(dm));
 }
 #[test]
@@ -7129,7 +7129,7 @@ fn resolve_model_list_prefetch_visibility_matches_auth_and_server_list() {
     if let Some(e) = defs.shift_remove(dm) {
         p.insert(dm.to_string(), e);
     }
-    let resolved = resolve_model_list(&cfg, Some(p));
+    let resolved = resolve_model_list(&cfg, Some(p)).unwrap();
     let sess: Vec<_> = resolved
         .values()
         .filter(|e| e.visible_for_auth(true))
@@ -7148,7 +7148,7 @@ fn resolve_model_list_keeps_prefetch_only_entries_and_prunes_defaults() {
     let mut p = IndexMap::new();
     let e = prefetch_model_entry("secret-xyz", 200000, ApiBackend::default());
     p.insert("secret-xyz".to_string(), e);
-    let resolved = resolve_model_list(&cfg, Some(p));
+    let resolved = resolve_model_list(&cfg, Some(p)).unwrap();
     assert!(resolved.contains_key("secret-xyz"));
     assert!(!resolved.contains_key(dm));
 }
@@ -7159,14 +7159,14 @@ fn resolve_model_list_prefetch_replaces_bundled_entirely() {
     let mut p = IndexMap::new();
     let e = prefetch_model_entry("other-model", 500_000, ApiBackend::Responses);
     p.insert("other-model".to_string(), e);
-    let resolved = resolve_model_list(&cfg, Some(p));
+    let resolved = resolve_model_list(&cfg, Some(p)).unwrap();
     assert!(resolved.contains_key("other-model"));
     assert!(!resolved.contains_key(dm));
 }
 #[test]
 fn resolve_model_list_empty_prefetch_yields_empty_base() {
     let cfg = Config::default();
-    let resolved = resolve_model_list(&cfg, Some(IndexMap::new()));
+    let resolved = resolve_model_list(&cfg, Some(IndexMap::new())).unwrap();
     assert!(resolved.is_empty());
 }
 /// Regression: enterprise managed config overlays env_key on an oauth-only
@@ -7188,7 +7188,7 @@ fn byok_config_overlay_visible_to_api_key_users() {
     base.info.supported_in_api = false;
     let mut prefetched = IndexMap::new();
     prefetched.insert("enterprise-alias".to_owned(), base);
-    let resolved = resolve_model_list(&cfg, Some(prefetched));
+    let resolved = resolve_model_list(&cfg, Some(prefetched)).unwrap();
     let entry = resolved
         .get("enterprise-alias")
         .expect("enterprise-alias must exist");
@@ -7215,7 +7215,7 @@ fn plain_config_overlay_preserves_bundled_visibility() {
     ))
     .unwrap();
     let cfg = Config::new_from_toml_cfg(&raw).expect("config should parse");
-    let resolved = resolve_model_list(&cfg, None);
+    let resolved = resolve_model_list(&cfg, None).unwrap();
     let entry = resolved.get(dm).expect("bundled default must exist");
     assert_eq!(
         entry.visible_for_auth(false),

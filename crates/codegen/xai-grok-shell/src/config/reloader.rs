@@ -392,13 +392,12 @@ impl ConfigReloader {
                 .send(ConfigUpdate::Compat(Box::new(new_compat)));
         }
 
-        // Models — compare [model] (BYOK entries) and [models] (default, surprise) tables.
-        // Use toml::Value comparison (covers all fields including nested model entries).
-        let old_model_table = self.last_global_config.get("model");
-        let new_model_table = new_global.get("model");
-        let old_models_table = self.last_global_config.get("models");
-        let new_models_table = new_global.get("models");
-        if old_model_table != new_model_table || old_models_table != new_models_table {
+        // Provider routing and credential helpers participate in model resolution
+        // even when the model entries themselves have not changed.
+        if ["model", "models", "model_providers", "auth_provider"]
+            .iter()
+            .any(|section| self.last_global_config.get(section) != new_global.get(section))
+        {
             info!("model config change detected");
             let _ = self.config_update_tx.send(ConfigUpdate::ModelsChanged);
         }
@@ -570,6 +569,90 @@ mod tests {
             key: key.to_string(),
             email: Some("test@test.com".to_string()),
             ..GrokAuth::test_default()
+        }
+    }
+
+    #[test]
+    fn provider_and_auth_table_changes_reload_models() {
+        // Home paths are cached process-wide. Use a fresh process for this
+        // actual disk reload so the full suite never touches a caller's home
+        // or depends on which earlier test initialized the cache.
+        if std::env::var_os("ASTRA_A5_RELOADER_CHILD").is_none() {
+            let tmp = tempfile::tempdir().unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "config::reloader::tests::provider_and_auth_table_changes_reload_models",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env_clear()
+                .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+                .env("HOME", tmp.path())
+                .env("GROK_HOME", tmp.path().join("grok"))
+                .env("ASTRA_A5_RELOADER_CHILD", "1")
+                .current_dir(tmp.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "isolated reload test failed:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+            return;
+        }
+        let home = PathBuf::from(std::env::var_os("GROK_HOME").unwrap());
+        std::fs::create_dir_all(&home).unwrap();
+        let path = home.join("config.toml");
+        let mut text = r#"
+            [model_providers.synthetic]
+            base_url = "https://provider.example/v1"
+            [model.synthetic]
+            model_provider = "synthetic"
+            context_window = 1000
+            [auth_provider.synthetic]
+            command = "printf synthetic-first"
+        "#
+        .to_owned();
+        std::fs::write(&path, &text).unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut reloader = ConfigReloader::new(
+            home,
+            0,
+            toml::from_str(&text).unwrap(),
+            "https://test.example".to_owned(),
+            None,
+            tx,
+            None,
+        );
+        let mut changed = || {
+            std::iter::from_fn(|| rx.try_recv().ok())
+                .filter(|update| matches!(update, ConfigUpdate::ModelsChanged))
+                .count()
+        };
+        reloader.reload_config().unwrap();
+        assert_eq!(changed(), 0, "unchanged config must not reload models");
+        for (from, to, why) in [
+            (
+                "context_window = 1000",
+                "context_window = 2000",
+                "model-only change",
+            ),
+            ("provider.example", "second.example", "provider-only change"),
+            (
+                "synthetic-first",
+                "synthetic-second",
+                "auth-helper-only change",
+            ),
+        ] {
+            text = text.replace(from, to);
+            std::fs::write(&path, &text).unwrap();
+            reloader.reload_config().unwrap();
+            assert_eq!(changed(), 1, "{why} must reload models");
+            reloader.reload_config().unwrap();
+            assert_eq!(changed(), 0, "unchanged follow-up after {why}");
         }
     }
 

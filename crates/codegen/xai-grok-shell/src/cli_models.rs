@@ -32,7 +32,13 @@ impl AuthStatus {
                 &agent_config.grok_com_config,
             ));
         }
-        let models = crate::agent::config::resolve_model_list(agent_config, None);
+        let models = match crate::agent::config::resolve_model_list(agent_config, None) {
+            Ok(models) => models,
+            Err(error) => {
+                tracing::warn!(%error, "model credential status unavailable");
+                return Self::NotAuthenticated;
+            }
+        };
         if crate::agent::auth_method::should_advertise_xai_api_key(
             agent_config.grok_com_config.api_key_auth_disabled(),
             models.values(),

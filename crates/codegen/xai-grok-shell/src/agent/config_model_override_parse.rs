@@ -496,7 +496,7 @@ mod tests {
             w.kind == ConfigWarningKind::DuplicateAlias
                 && w.field() == Some("send_compactions_remaining")
         }));
-        let resolved = crate::agent::config::resolve_model_list(&cfg, None);
+        let resolved = crate::agent::config::resolve_model_list(&cfg, None).unwrap();
         assert!(resolved.contains_key("grok-4.5"));
     }
 
