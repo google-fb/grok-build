@@ -1,4 +1,8 @@
-//! Per-prompt and per-session billing ledgers (not serialized).
+//! Per-prompt and per-session billing ledgers.
+//!
+//! The session ledger is also checkpointed to `{session_dir}/usage-ledger.json`
+//! after every billed mutation, so a process killed mid-turn still leaves its
+//! spend on disk. Upstream `usage.json` (per-turn summary) is unchanged.
 //!
 //! `total_tokens()` is input + output: Responses wire `total` is live context
 //! length. Compaction and other side calls never call `record_main_loop_call`.
@@ -26,9 +30,11 @@
 //! and scrubs costs when partial or incomplete.
 
 use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
 use xai_grok_sampling_types::TokenUsage;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct UsageTotals {
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -103,7 +109,8 @@ fn merge_cost_ticks(a: Option<i64>, b: Option<i64>) -> Option<i64> {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct UsageLedger {
     pub totals: UsageTotals,
     pub by_model: IndexMap<String, UsageTotals>,
@@ -198,5 +205,34 @@ mod tests {
 
         ledger.record_subagent(&[], true);
         assert!(ledger.incomplete);
+    }
+
+    /// Field names are read by the tuco-lab-bench cost accounting; keep them stable.
+    #[test]
+    fn usage_checkpoint_json_keeps_stable_field_names() {
+        let mut ledger = UsageLedger::default();
+        ledger.record_main_loop_call("m", &tu(10, 4), Some(12), Some(30));
+        ledger.record_main_loop_call("m", &tu(3, 1), Some(8), None);
+        let json = serde_json::to_value(&ledger).expect("serialize");
+        for key in [
+            "input_tokens",
+            "output_tokens",
+            "cached_read_tokens",
+            "cache_creation_tokens",
+            "reasoning_tokens",
+            "model_calls",
+            "api_duration_ms",
+            "cost_usd_ticks",
+            "cost_missing_calls",
+        ] {
+            assert!(json["totals"].get(key).is_some(), "missing totals.{key}");
+            assert!(json["by_model"]["m"].get(key).is_some(), "missing by_model.m.{key}");
+        }
+        assert_eq!(json["main_loop_model_calls"], 2);
+        assert_eq!(json["incomplete"], false);
+        assert_eq!(json["totals"]["cost_usd_ticks"], 30);
+        assert_eq!(json["totals"]["cost_missing_calls"], 1);
+        let restored: UsageLedger = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(restored, ledger);
     }
 }

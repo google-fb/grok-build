@@ -1,7 +1,7 @@
 use std::io;
 
 use tokio::sync::{mpsc, oneshot};
-use xai_chat_state::{ChatPersistence, StrictAppendAck, StrictAppendError};
+use xai_chat_state::{ChatPersistence, StrictAppendAck, StrictAppendError, UsageLedger};
 use xai_grok_sampling_types::ConversationItem;
 
 use super::persistence::PersistenceMsg;
@@ -76,6 +76,10 @@ impl ChatPersistence for ChannelChatPersistence {
 
     fn flush(&mut self) {
         let _ = self.tx.send(PersistenceMsg::Flush);
+    }
+
+    fn persist_usage_checkpoint(&mut self, ledger: &UsageLedger) {
+        let _ = self.tx.send(PersistenceMsg::UsageCheckpoint(ledger.clone()));
     }
 }
 

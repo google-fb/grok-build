@@ -37,6 +37,10 @@ pub trait ChatPersistence: Send + 'static {
 
     /// Flush pending writes to disk.
     fn flush(&mut self);
+
+    /// Checkpoint the session billing ledger after a billed mutation.
+    /// Backends without a durable store keep the default no-op.
+    fn persist_usage_checkpoint(&mut self, _ledger: &crate::usage::UsageLedger) {}
 }
 
 /// Outcome of a conversation image strip, as acknowledged by the actor.

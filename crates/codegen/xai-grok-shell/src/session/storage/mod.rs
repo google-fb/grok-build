@@ -32,6 +32,7 @@ pub(crate) const PLAN_FILE: &str = "plan.json";
 pub(crate) const PLAN_MODE_FILE: &str = "plan_mode.json";
 pub(crate) const SIGNALS_FILE: &str = "signals.json";
 pub(crate) const USAGE_FILE: &str = "usage.json";
+pub(crate) const USAGE_CHECKPOINT_FILE: &str = "usage-ledger.json";
 pub(crate) const GOAL_STATE_FILE: &str = "goal/state.json";
 pub(crate) const ANNOUNCEMENT_STATE_FILE: &str = "announcement_state.json";
 pub(crate) const CHAT_HISTORY_FILE: &str = "chat_history.jsonl";
@@ -1339,6 +1340,15 @@ pub trait StorageAdapter: Send + Sync {
         info: &Info,
         usage: &crate::session::usage_file::SessionUsageFile,
     ) -> io::Result<()>;
+
+    /// Write the raw session billing ledger checkpoint (`usage-ledger.json`).
+    async fn write_usage_checkpoint(
+        &self,
+        _info: &Info,
+        _ledger: &xai_chat_state::UsageLedger,
+    ) -> io::Result<()> {
+        Ok(())
+    }
 
     async fn write_announcement_state(
         &self,

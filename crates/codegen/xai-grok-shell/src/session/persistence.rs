@@ -313,6 +313,8 @@ pub enum PersistenceMsg {
         release: tokio::sync::oneshot::Receiver<()>,
     },
     Signals(SessionSignals),
+    /// Checkpoint the session billing ledger (`usage-ledger.json`) after a billed call.
+    UsageCheckpoint(xai_chat_state::UsageLedger),
     /// Persist this turn's session usage, then ack. Callers that publish turn-end
     /// (and `x.ai/session/state`) wait so `usage.json` is visible before the turn resolves.
     UsageTurn {
@@ -2488,6 +2490,11 @@ impl SessionPersistence {
                 PersistenceMsg::Signals(signals) => {
                     if let Err(e) = self.storage.write_signals(&self.info, &signals).await {
                         tracing::warn!(?e, "failed to write session signals");
+                    }
+                }
+                PersistenceMsg::UsageCheckpoint(ledger) => {
+                    if let Err(e) = self.storage.write_usage_checkpoint(&self.info, &ledger).await {
+                        tracing::warn!(?e, "failed to write session usage checkpoint");
                     }
                 }
                 PersistenceMsg::UsageTurn {

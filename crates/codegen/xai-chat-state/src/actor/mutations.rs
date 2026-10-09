@@ -468,6 +468,7 @@ impl ChatStateActor {
             api_duration_ms,
             cost_usd_ticks,
         );
+        self.checkpoint_session_usage();
     }
 
     pub(super) fn record_subagent_usage(
@@ -490,6 +491,7 @@ impl ChatStateActor {
         self.state
             .session_usage
             .record_subagent(by_model, incomplete);
+        self.checkpoint_session_usage();
     }
 
     pub(super) fn mark_usage_incomplete(&mut self, prompt: bool, session: bool) {
@@ -501,7 +503,13 @@ impl ChatStateActor {
         }
         if session {
             self.state.session_usage.mark_incomplete();
+            self.checkpoint_session_usage();
         }
+    }
+
+    fn checkpoint_session_usage(&mut self) {
+        self.persistence
+            .persist_usage_checkpoint(&self.state.session_usage);
     }
 
     pub(super) fn increment_prompt_index(&mut self) {

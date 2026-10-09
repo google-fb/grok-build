@@ -243,6 +243,9 @@ impl JsonlStorageAdapter {
     fn usage_file(&self, info: &Info) -> PathBuf {
         self.session_dir(info).join(super::USAGE_FILE)
     }
+    fn usage_checkpoint_file(&self, info: &Info) -> PathBuf {
+        self.session_dir(info).join(super::USAGE_CHECKPOINT_FILE)
+    }
     fn announcement_state_file(&self, info: &Info) -> PathBuf {
         self.session_dir(info).join(super::ANNOUNCEMENT_STATE_FILE)
     }
@@ -1497,6 +1500,15 @@ impl StorageAdapter for JsonlStorageAdapter {
         let json = serde_json::to_vec_pretty(usage)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         super::write_bytes_atomic_async(&self.usage_file(info), json).await
+    }
+    async fn write_usage_checkpoint(
+        &self,
+        info: &Info,
+        ledger: &xai_chat_state::UsageLedger,
+    ) -> io::Result<()> {
+        let json = serde_json::to_vec(ledger)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        super::write_bytes_atomic_async(&self.usage_checkpoint_file(info), json).await
     }
     async fn write_announcement_state(
         &self,
